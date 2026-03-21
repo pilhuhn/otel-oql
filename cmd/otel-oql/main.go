@@ -8,6 +8,7 @@ import (
 	"syscall"
 
 	"github.com/pilhuhn/otel-oql/internal/config"
+	"github.com/pilhuhn/otel-oql/pkg/api"
 	"github.com/pilhuhn/otel-oql/pkg/ingestion"
 	"github.com/pilhuhn/otel-oql/pkg/pinot"
 	"github.com/pilhuhn/otel-oql/pkg/receiver"
@@ -42,6 +43,7 @@ func run() error {
 	fmt.Printf("Pinot URL: %s\n", cfg.PinotURL)
 	fmt.Printf("OTLP gRPC Port: %d\n", cfg.OTLPGRPCPort)
 	fmt.Printf("OTLP HTTP Port: %d\n", cfg.OTLPHTTPPort)
+	fmt.Printf("Query API Port: %d\n", cfg.QueryAPIPort)
 	fmt.Printf("Test Mode: %v\n", cfg.TestMode)
 
 	// Initialize Pinot client
@@ -57,6 +59,9 @@ func run() error {
 	grpcReceiver := receiver.NewGRPCReceiver(cfg.OTLPGRPCPort, validator, ingester)
 	httpReceiver := receiver.NewHTTPReceiver(cfg.OTLPHTTPPort, validator, ingester)
 
+	// Initialize query API server
+	queryServer := api.NewServer(cfg.QueryAPIPort, validator, pinotClient)
+
 	ctx := context.Background()
 
 	// Start receivers
@@ -68,6 +73,11 @@ func run() error {
 		return fmt.Errorf("failed to start HTTP receiver: %w", err)
 	}
 
+	// Start query API server
+	if err := queryServer.Start(ctx); err != nil {
+		return fmt.Errorf("failed to start query API server: %w", err)
+	}
+
 	fmt.Println("OTEL-OQL service started successfully")
 
 	// Wait for shutdown signal
@@ -77,13 +87,17 @@ func run() error {
 
 	fmt.Println("\nShutting down...")
 
-	// Stop receivers
+	// Stop servers
 	if err := grpcReceiver.Stop(ctx); err != nil {
 		fmt.Printf("Error stopping gRPC receiver: %v\n", err)
 	}
 
 	if err := httpReceiver.Stop(ctx); err != nil {
 		fmt.Printf("Error stopping HTTP receiver: %v\n", err)
+	}
+
+	if err := queryServer.Stop(ctx); err != nil {
+		fmt.Printf("Error stopping query API server: %v\n", err)
 	}
 
 	fmt.Println("Shutdown complete")
