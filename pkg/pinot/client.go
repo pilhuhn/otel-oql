@@ -95,11 +95,39 @@ func (c *Client) Insert(ctx context.Context, tableName string, records []map[str
 	return nil
 }
 
-// CreateTable creates a table in Pinot
-func (c *Client) CreateTable(ctx context.Context, schema *TableSchema) error {
+// CreateSchema creates a schema in Pinot
+func (c *Client) CreateSchema(ctx context.Context, schema interface{}) error {
 	jsonData, err := json.Marshal(schema)
 	if err != nil {
 		return fmt.Errorf("failed to marshal schema: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, "POST", c.brokerURL+"/schemas", bytes.NewBuffer(jsonData))
+	if err != nil {
+		return fmt.Errorf("failed to create request: %w", err)
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("failed to create schema: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("create schema failed with status %d: %s", resp.StatusCode, string(body))
+	}
+
+	return nil
+}
+
+// CreateTable creates a table in Pinot
+func (c *Client) CreateTable(ctx context.Context, tableConfig interface{}) error {
+	jsonData, err := json.Marshal(tableConfig)
+	if err != nil {
+		return fmt.Errorf("failed to marshal table config: %w", err)
 	}
 
 	req, err := http.NewRequestWithContext(ctx, "POST", c.brokerURL+"/tables", bytes.NewBuffer(jsonData))

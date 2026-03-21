@@ -34,22 +34,37 @@ func (i *Ingester) IngestTraces(ctx context.Context, tenantID int, traces ptrace
 
 			for idx := 0; idx < ss.Spans().Len(); idx++ {
 				span := ss.Spans().At(idx)
+				attrs := span.Attributes().AsRaw()
 
 				record := map[string]interface{}{
-					"tenant_id":  tenantID,
-					"trace_id":   span.TraceID().String(),
-					"span_id":    span.SpanID().String(),
+					"tenant_id":      tenantID,
+					"trace_id":       span.TraceID().String(),
+					"span_id":        span.SpanID().String(),
 					"parent_span_id": span.ParentSpanID().String(),
-					"name":       span.Name(),
-					"kind":       span.Kind().String(),
-					"start_time": span.StartTimestamp().AsTime().UnixNano(),
-					"end_time":   span.EndTimestamp().AsTime().UnixNano(),
-					"duration":   span.EndTimestamp().AsTime().Sub(span.StartTimestamp().AsTime()).Nanoseconds(),
-					"timestamp":  span.StartTimestamp().AsTime().UnixMilli(),
-					"attributes": span.Attributes().AsRaw(),
-					"resource_attributes": resourceAttrs,
-					"status_code": span.Status().Code().String(),
+					"name":           span.Name(),
+					"kind":           span.Kind().String(),
+					"duration":       span.EndTimestamp().AsTime().Sub(span.StartTimestamp().AsTime()).Nanoseconds(),
+					"timestamp":      span.StartTimestamp().AsTime().UnixMilli(),
+					"status_code":    span.Status().Code().String(),
 					"status_message": span.Status().Message(),
+
+					// Extract common semantic convention attributes
+					"service_name":         extractString(resourceAttrs, "service.name"),
+					"http_method":          extractString(attrs, "http.method"),
+					"http_status_code":     extractInt(attrs, "http.status_code"),
+					"http_route":           extractString(attrs, "http.route"),
+					"http_target":          extractString(attrs, "http.target"),
+					"db_system":            extractString(attrs, "db.system"),
+					"db_statement":         extractString(attrs, "db.statement"),
+					"messaging_system":     extractString(attrs, "messaging.system"),
+					"messaging_destination": extractString(attrs, "messaging.destination"),
+					"rpc_service":          extractString(attrs, "rpc.service"),
+					"rpc_method":           extractString(attrs, "rpc.method"),
+					"error":                extractBool(attrs, "error"),
+
+					// Store remaining attributes as JSON
+					"attributes":          removeKnownKeys(attrs, spanKnownKeys),
+					"resource_attributes": removeKnownKeys(resourceAttrs, spanResourceKnownKeys),
 				}
 
 				records = append(records, record)
@@ -111,17 +126,26 @@ func (i *Ingester) IngestLogs(ctx context.Context, tenantID int, logs plog.Logs)
 
 			for idx := 0; idx < sl.LogRecords().Len(); idx++ {
 				logRecord := sl.LogRecords().At(idx)
+				attrs := logRecord.Attributes().AsRaw()
 
 				record := map[string]interface{}{
-					"tenant_id":  tenantID,
-					"timestamp":  logRecord.Timestamp().AsTime().UnixMilli(),
-					"trace_id":   logRecord.TraceID().String(),
-					"span_id":    logRecord.SpanID().String(),
+					"tenant_id":       tenantID,
+					"timestamp":       logRecord.Timestamp().AsTime().UnixMilli(),
+					"trace_id":        logRecord.TraceID().String(),
+					"span_id":         logRecord.SpanID().String(),
 					"severity_number": logRecord.SeverityNumber(),
-					"severity_text": logRecord.SeverityText(),
-					"body":       logRecord.Body().AsString(),
-					"attributes": logRecord.Attributes().AsRaw(),
-					"resource_attributes": resourceAttrs,
+					"severity_text":   logRecord.SeverityText(),
+					"body":            logRecord.Body().AsString(),
+
+					// Extract common attributes
+					"service_name": extractString(resourceAttrs, "service.name"),
+					"host_name":    extractString(resourceAttrs, "host.name"),
+					"log_level":    extractString(attrs, "log.level"),
+					"log_source":   extractString(attrs, "log.source"),
+
+					// Store remaining attributes as JSON
+					"attributes":          removeKnownKeys(attrs, logKnownKeys),
+					"resource_attributes": removeKnownKeys(resourceAttrs, logResourceKnownKeys),
 				}
 
 				records = append(records, record)
@@ -143,14 +167,25 @@ func (i *Ingester) convertGauge(tenantID int, metric pmetric.Metric, resourceAtt
 
 	for j := 0; j < gauge.DataPoints().Len(); j++ {
 		dp := gauge.DataPoints().At(j)
+		attrs := dp.Attributes().AsRaw()
+
 		record := map[string]interface{}{
-			"tenant_id":    tenantID,
-			"metric_name":  metric.Name(),
-			"metric_type":  "gauge",
-			"timestamp":    dp.Timestamp().AsTime().UnixMilli(),
-			"value":        getDataPointValue(dp),
-			"attributes":   dp.Attributes().AsRaw(),
-			"resource_attributes": resourceAttrs,
+			"tenant_id":   tenantID,
+			"metric_name": metric.Name(),
+			"metric_type": "gauge",
+			"timestamp":   dp.Timestamp().AsTime().UnixMilli(),
+			"value":       getDataPointValue(dp),
+
+			// Extract common attributes
+			"service_name": extractString(resourceAttrs, "service.name"),
+			"host_name":    extractString(resourceAttrs, "host.name"),
+			"environment":  extractString(attrs, "environment"),
+			"job":          extractString(attrs, "job"),
+			"instance":     extractString(attrs, "instance"),
+
+			// Store remaining attributes as JSON
+			"attributes":          removeKnownKeys(attrs, metricKnownKeys),
+			"resource_attributes": removeKnownKeys(resourceAttrs, metricResourceKnownKeys),
 		}
 		records = append(records, record)
 	}
@@ -165,17 +200,28 @@ func (i *Ingester) convertSum(tenantID int, metric pmetric.Metric, resourceAttrs
 
 	for j := 0; j < sum.DataPoints().Len(); j++ {
 		dp := sum.DataPoints().At(j)
+		attrs := dp.Attributes().AsRaw()
+
 		record := map[string]interface{}{
-			"tenant_id":    tenantID,
-			"metric_name":  metric.Name(),
-			"metric_type":  "sum",
-			"timestamp":    dp.Timestamp().AsTime().UnixMilli(),
-			"value":        getDataPointValue(dp),
-			"attributes":   dp.Attributes().AsRaw(),
-			"resource_attributes": resourceAttrs,
+			"tenant_id":   tenantID,
+			"metric_name": metric.Name(),
+			"metric_type": "sum",
+			"timestamp":   dp.Timestamp().AsTime().UnixMilli(),
+			"value":       getDataPointValue(dp),
+
+			// Extract common attributes
+			"service_name": extractString(resourceAttrs, "service.name"),
+			"host_name":    extractString(resourceAttrs, "host.name"),
+			"environment":  extractString(attrs, "environment"),
+			"job":          extractString(attrs, "job"),
+			"instance":     extractString(attrs, "instance"),
+
+			// Store remaining attributes as JSON
+			"attributes":          removeKnownKeys(attrs, metricKnownKeys),
+			"resource_attributes": removeKnownKeys(resourceAttrs, metricResourceKnownKeys),
 		}
 
-		// Add exemplars if present
+		// Add exemplars if present (the "wormhole" for trace correlation)
 		if dp.Exemplars().Len() > 0 {
 			exemplar := dp.Exemplars().At(0)
 			if !exemplar.TraceID().IsEmpty() {
@@ -199,18 +245,29 @@ func (i *Ingester) convertHistogram(tenantID int, metric pmetric.Metric, resourc
 
 	for j := 0; j < histogram.DataPoints().Len(); j++ {
 		dp := histogram.DataPoints().At(j)
+		attrs := dp.Attributes().AsRaw()
+
 		record := map[string]interface{}{
-			"tenant_id":    tenantID,
-			"metric_name":  metric.Name(),
-			"metric_type":  "histogram",
-			"timestamp":    dp.Timestamp().AsTime().UnixMilli(),
-			"count":        dp.Count(),
-			"sum":          dp.Sum(),
-			"attributes":   dp.Attributes().AsRaw(),
-			"resource_attributes": resourceAttrs,
+			"tenant_id":   tenantID,
+			"metric_name": metric.Name(),
+			"metric_type": "histogram",
+			"timestamp":   dp.Timestamp().AsTime().UnixMilli(),
+			"count":       dp.Count(),
+			"sum":         dp.Sum(),
+
+			// Extract common attributes
+			"service_name": extractString(resourceAttrs, "service.name"),
+			"host_name":    extractString(resourceAttrs, "host.name"),
+			"environment":  extractString(attrs, "environment"),
+			"job":          extractString(attrs, "job"),
+			"instance":     extractString(attrs, "instance"),
+
+			// Store remaining attributes as JSON
+			"attributes":          removeKnownKeys(attrs, metricKnownKeys),
+			"resource_attributes": removeKnownKeys(resourceAttrs, metricResourceKnownKeys),
 		}
 
-		// Add exemplars if present
+		// Add exemplars if present (the "wormhole" for trace correlation)
 		if dp.Exemplars().Len() > 0 {
 			exemplar := dp.Exemplars().At(0)
 			if !exemplar.TraceID().IsEmpty() {

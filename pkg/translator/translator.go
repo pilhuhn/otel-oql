@@ -127,11 +127,21 @@ func (t *Translator) translateBinaryCondition(cond *oql.BinaryCondition) (string
 	operator := cond.Operator
 	value := cond.Right
 
-	// Handle special field names (e.g., attributes.error -> attributes['error'])
+	// Check if field uses dot notation (attributes.field or resource_attributes.field)
 	if strings.Contains(field, ".") {
 		parts := strings.SplitN(field, ".", 2)
+
+		// Check if this is an attribute access
 		if parts[0] == "attributes" || parts[0] == "resource_attributes" {
-			field = fmt.Sprintf("%s['%s']", parts[0], parts[1])
+			attributeKey := parts[1]
+
+			// Check if this attribute has been extracted to a native column
+			if nativeColumn := t.getNativeColumn(attributeKey); nativeColumn != "" {
+				field = nativeColumn
+			} else {
+				// Use JSON extraction for non-native attributes
+				field = fmt.Sprintf("JSON_EXTRACT_SCALAR(%s, '$.%s', 'STRING')", parts[0], attributeKey)
+			}
 		}
 	}
 
@@ -139,6 +149,44 @@ func (t *Translator) translateBinaryCondition(cond *oql.BinaryCondition) (string
 	valueStr := t.formatValue(value)
 
 	return fmt.Sprintf("%s %s %s", field, operator, valueStr), nil
+}
+
+// getNativeColumn returns the native column name if the attribute has been extracted
+func (t *Translator) getNativeColumn(attributeKey string) string {
+	// Map of OTel semantic conventions to native columns
+	nativeColumns := map[string]string{
+		// Span attributes
+		"http.method":            "http_method",
+		"http.status_code":       "http_status_code",
+		"http.route":             "http_route",
+		"http.target":            "http_target",
+		"db.system":              "db_system",
+		"db.statement":           "db_statement",
+		"messaging.system":       "messaging_system",
+		"messaging.destination":  "messaging_destination",
+		"rpc.service":            "rpc_service",
+		"rpc.method":             "rpc_method",
+		"error":                  "error",
+
+		// Resource attributes (service.name is in both spans and metrics)
+		"service.name":           "service_name",
+		"host.name":              "host_name",
+
+		// Metric attributes
+		"job":                    "job",
+		"instance":               "instance",
+		"environment":            "environment",
+
+		// Log attributes
+		"log.level":              "log_level",
+		"log.source":             "log_source",
+	}
+
+	if nativeCol, ok := nativeColumns[attributeKey]; ok {
+		return nativeCol
+	}
+
+	return ""
 }
 
 // formatValue formats a value for SQL
