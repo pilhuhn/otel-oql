@@ -227,19 +227,20 @@ func (t *Translator) formatValue(value interface{}) string {
 }
 
 // translateExpand translates an expand operation
+// Returns a special marker SQL that the API server will recognize and execute in two steps
 func (t *Translator) translateExpand(tableName, baseSQL string, expand *oql.ExpandOp) (string, error) {
 	if expand.Type != "trace" {
 		return "", fmt.Errorf("unsupported expand type: %s", expand.Type)
 	}
 
-	// Expand trace: get all spans with the same trace_id
-	// This requires a subquery to get the trace_ids first
-	sql := fmt.Sprintf(
-		"SELECT * FROM %s WHERE tenant_id = %d AND trace_id IN (SELECT DISTINCT trace_id FROM (%s))",
-		tableName,
-		t.tenantID,
-		baseSQL,
-	)
+	// Pinot doesn't support subqueries in IN clauses, so we return a marker
+	// The API server will:
+	// 1. Execute the base query to get trace_ids
+	// 2. Build an IN clause with those trace_ids
+	// 3. Execute the final query
+
+	// Use a special marker format: __EXPAND_TRACE__<baseSQL>__END_EXPAND__
+	sql := fmt.Sprintf("__EXPAND_TRACE__%s__TABLE__%s__END_EXPAND__", baseSQL, tableName)
 
 	return sql, nil
 }

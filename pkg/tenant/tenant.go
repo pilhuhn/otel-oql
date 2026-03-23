@@ -17,7 +17,7 @@ const (
 	DefaultTestTenantID = 0
 
 	// HeaderTenantID is the HTTP header name for tenant ID
-	HeaderTenantID = "X-Tenant-ID"
+	HeaderTenantID = "tenant-id"
 
 	// MetadataTenantID is the gRPC metadata key for tenant ID
 	MetadataTenantID = "tenant-id"
