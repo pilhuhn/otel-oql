@@ -33,7 +33,7 @@ func (p *Parser) Parse() (*Query, error) {
 	}
 
 	p.pos = 7 // skip "signal="
-	signalStr := p.readUntil([]string{"|", " where ", " expand ", " correlate ", " get_exemplars", " switch_context ", " extract ", " filter ", " limit ", " aggregate ", " avg ", " min ", " max ", " count ", " sum ", " group ", " since ", " between ", "\n", ""})
+	signalStr := p.readUntil(operationKeywords())
 	signalStr = strings.TrimSpace(signalStr)
 
 	switch signalStr {
@@ -130,7 +130,7 @@ func (p *Parser) parseWhere() (Operation, error) {
 // parseCondition parses a condition expression
 func (p *Parser) parseCondition() (Condition, error) {
 	// Read until pipe, operation keyword, or end
-	condStr := p.readUntil([]string{"|", " expand ", " correlate ", " get_exemplars", " switch_context ", " extract ", " filter ", " limit ", " aggregate ", " avg ", " min ", " max ", " count ", " sum ", " group ", " since ", " between ", "\n", ""})
+	condStr := p.readUntil(operationKeywords())
 	condStr = strings.TrimSpace(condStr)
 
 	// Simple parsing: split by "and" and "or"
@@ -250,7 +250,7 @@ func (p *Parser) parseCorrelate() (Operation, error) {
 	p.consumeWord("correlate")
 	p.skipWhitespace()
 
-	signalsStr := p.readUntil([]string{"|", " expand ", " where ", " get_exemplars", " switch_context ", " extract ", " filter ", " limit ", " aggregate ", " avg ", " min ", " max ", " count ", " sum ", " group ", " since ", " between ", "\n", ""})
+	signalsStr := p.readUntil(operationKeywords())
 	signalsStr = strings.TrimSpace(signalsStr)
 
 	// Split by comma
@@ -302,7 +302,7 @@ func (p *Parser) parseSwitchContext() (Operation, error) {
 	}
 	p.pos += 7 // skip "signal="
 
-	signalStr := p.readUntil([]string{"|", " where ", " expand ", " correlate ", " get_exemplars", " extract ", " filter ", " limit ", " aggregate ", " avg ", " min ", " max ", " count ", " sum ", " group ", " since ", " between ", "\n", ""})
+	signalStr := p.readUntil(operationKeywords())
 	signalStr = strings.TrimSpace(signalStr)
 
 	var signal SignalType
@@ -428,6 +428,17 @@ func (p *Parser) readUntil(delimiters []string) string {
 	return p.input[start:p.pos]
 }
 
+// operationKeywords returns a list of all operation keywords with and without leading spaces
+func operationKeywords() []string {
+	ops := []string{"where", "expand", "correlate", "get_exemplars", "switch_context", "extract", "filter", "limit", "aggregate", "avg", "min", "max", "count", "sum", "group", "since", "between"}
+	result := []string{"|", "\n", ""}
+	for _, op := range ops {
+		result = append(result, " "+op+" ")
+		result = append(result, " "+op+"(")  // For functions like avg(, count(
+	}
+	return result
+}
+
 func (p *Parser) skipWhitespace() {
 	for p.pos < len(p.input) && isWhitespace(p.input[p.pos]) {
 		p.pos++
@@ -510,7 +521,7 @@ func (p *Parser) parseGroupBy() (Operation, error) {
 	p.skipWhitespace()
 
 	// Read fields (comma-separated)
-	fieldsStr := p.readUntil([]string{"|", " aggregate ", " avg ", " min ", " max ", " count ", " sum ", " limit ", "\n", ""})
+	fieldsStr := p.readUntil(operationKeywords())
 	fieldsStr = strings.TrimSpace(fieldsStr)
 
 	// Split by comma

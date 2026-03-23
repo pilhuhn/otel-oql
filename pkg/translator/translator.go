@@ -10,7 +10,8 @@ import (
 
 // Translator translates OQL queries to Pinot SQL
 type Translator struct {
-	tenantID int
+	tenantID      int
+	groupByFields []string // Track group by fields for aggregations
 }
 
 // NewTranslator creates a new OQL to SQL translator
@@ -78,13 +79,13 @@ func (t *Translator) TranslateQuery(query *oql.Query) ([]string, error) {
 			}
 			sql += " AND " + filterSQL
 
+		case *oql.GroupByOp:
+			// Group by stores fields for later use by aggregations
+			t.groupByFields = v.Fields
+
 		case *oql.AggregateOp:
 			// Aggregate modifies the SELECT clause
 			sql = t.translateAggregate(sql, v)
-
-		case *oql.GroupByOp:
-			// Group by adds GROUP BY clause
-			sql = t.translateGroupBy(sql, v)
 
 		case *oql.SinceOp:
 			// Since adds time range filter
@@ -344,8 +345,24 @@ func (t *Translator) translateAggregate(baseSQL string, agg *oql.AggregateOp) st
 		aggFunc = fmt.Sprintf("%s AS %s", aggFunc, agg.Alias)
 	}
 
-	// Replace SELECT * with the aggregation
-	sql := strings.Replace(baseSQL, "SELECT *", "SELECT "+aggFunc, 1)
+	// Build SELECT clause
+	var selectClause string
+	if len(t.groupByFields) > 0 {
+		// Include group by fields in SELECT along with aggregation
+		selectClause = strings.Join(t.groupByFields, ", ") + ", " + aggFunc
+	} else {
+		// Just the aggregation
+		selectClause = aggFunc
+	}
+
+	// Replace SELECT * with the select clause
+	sql := strings.Replace(baseSQL, "SELECT *", "SELECT "+selectClause, 1)
+
+	// Add GROUP BY clause if we have group by fields
+	if len(t.groupByFields) > 0 {
+		sql += " GROUP BY " + strings.Join(t.groupByFields, ", ")
+	}
+
 	return sql
 }
 
