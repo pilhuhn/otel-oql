@@ -77,14 +77,18 @@ OTEL-OQL is a multi-tenant OpenTelemetry data ingestion and query service writte
 
 ## OQL Query Language
 
-OQL enables powerful observability workflows by allowing queries to start from one signal type and correlate or expand into others. The pipe operator (`|`) is optional but recommended for readability.
+OQL enables powerful observability workflows by allowing queries to start from one signal type and correlate or expand into others. **The pipe operator (`|`) is completely optional** - use it for readability or omit it entirely.
 
 ### Key Operators
 
 #### `where`
 Filter data based on conditions.
 ```
+# With pipes (readable)
 signal=spans | where name == "checkout_process" and duration > 500ms
+
+# Without pipes (also valid)
+signal=spans where name == "checkout_process" and duration > 500ms
 ```
 
 #### `expand trace`

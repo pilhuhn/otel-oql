@@ -33,7 +33,7 @@ func (p *Parser) Parse() (*Query, error) {
 	}
 
 	p.pos = 7 // skip "signal="
-	signalStr := p.readUntil([]string{"|", "\n", ""})
+	signalStr := p.readUntil([]string{"|", " where ", " expand ", " correlate ", " get_exemplars", " switch_context ", " extract ", " filter ", " limit ", "\n", ""})
 	signalStr = strings.TrimSpace(signalStr)
 
 	switch signalStr {
@@ -121,8 +121,8 @@ func (p *Parser) parseWhere() (Operation, error) {
 
 // parseCondition parses a condition expression
 func (p *Parser) parseCondition() (Condition, error) {
-	// Read until pipe or end
-	condStr := p.readUntil([]string{"|", "\n", ""})
+	// Read until pipe, operation keyword, or end
+	condStr := p.readUntil([]string{"|", " expand ", " correlate ", " get_exemplars", " switch_context ", " extract ", " filter ", " limit ", "\n", ""})
 	condStr = strings.TrimSpace(condStr)
 
 	// Simple parsing: split by "and" and "or"
@@ -242,7 +242,7 @@ func (p *Parser) parseCorrelate() (Operation, error) {
 	p.consumeWord("correlate")
 	p.skipWhitespace()
 
-	signalsStr := p.readUntil([]string{"|", "\n", ""})
+	signalsStr := p.readUntil([]string{"|", " expand ", " where ", " get_exemplars", " switch_context ", " extract ", " filter ", " limit ", "\n", ""})
 	signalsStr = strings.TrimSpace(signalsStr)
 
 	// Split by comma
@@ -294,7 +294,7 @@ func (p *Parser) parseSwitchContext() (Operation, error) {
 	}
 	p.pos += 7 // skip "signal="
 
-	signalStr := p.readUntil([]string{"|", "\n", ""})
+	signalStr := p.readUntil([]string{"|", " where ", " expand ", " correlate ", " get_exemplars", " extract ", " filter ", " limit ", "\n", ""})
 	signalStr = strings.TrimSpace(signalStr)
 
 	var signal SignalType

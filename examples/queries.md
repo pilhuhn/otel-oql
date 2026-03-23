@@ -2,14 +2,18 @@
 
 This document contains example OQL queries demonstrating various use cases.
 
+**Note on Syntax:** Pipes (`|`) are completely optional in OQL. Use them for readability or omit them - both work identically.
+
 ## Basic Queries
 
 ### Find slow spans
 
 ```oql
-signal=spans
-| where duration > 500ms
-| limit 100
+# With pipes (readable)
+signal=spans | where duration > 500ms | limit 100
+
+# Without pipes (also valid)
+signal=spans where duration > 500ms limit 100
 ```
 
 ### Find error logs

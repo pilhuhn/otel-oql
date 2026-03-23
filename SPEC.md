@@ -16,22 +16,22 @@ This is a service that basically does two tasks:
 
 == OQL query language
 
-The language will allow to select a signal to start with and execute a qury like the following:
-Note, that the examples have pipes (`|`), but that is not a hard requirement.
+The language will allow to select a signal to start with and execute a query like the following:
+**Note: Pipes (`|`) are completely optional** - you can use them for readability or omit them entirely.
 
 ```
-signal=spans 
-| where name == "checkout_process" and duration > 500ms 
-| limit 1 
-| expand trace  // Magic operator: fetches all spans with the same trace_id
+# With pipes (for readability)
+signal=spans | where name == "checkout_process" and duration > 500ms | limit 1 | expand trace
+
+# Without pipes (also valid)
+signal=spans where name == "checkout_process" and duration > 500ms limit 1 expand trace
 ```
 
 This will fetch a span from a resource 'checkout_proces' that has a duration of more than 500ms
 
 ```
-signal=spans
-| where name == "payment_gateway" and attributes.error == "true"
-| correlate logs, metrics
+# Search for errors and correlate across signals
+signal=spans where name == "payment_gateway" and attributes.error == "true" correlate logs, metrics
 ```
 
 To search for a span with an error attribute and then find matching logs and metrics
