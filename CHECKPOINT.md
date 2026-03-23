@@ -9,13 +9,13 @@
 Successfully implemented a complete multi-tenant OpenTelemetry data ingestion and query service with OQL (Observability Query Language) support, backed by Apache Pinot with Kafka streaming. The service includes comprehensive integration tests (100% pass rate), YAML config file support, and debug logging throughout the pipeline.
 
 **Latest Major Updates**:
+- ✅ **Complete OQL Implementation** - All operations fully functional with aggregations & time functions
+- ✅ **Aggregation Support** - avg, min, max, sum, count with group by
+- ✅ **Time Functions** - since (relative) and between (absolute) time ranges
 - ✅ **Pipe-Optional OQL Syntax** - Pipes (`|`) now completely optional for cleaner queries
 - ✅ **100% Test Pass Rate** - All 8 integration tests passing
 - ✅ Multi-tenant isolation fixed across all signals
-- ✅ OQL expand operation rewritten for Pinot compatibility
 - ✅ Kafka streaming integration with REALTIME Pinot tables
-- ✅ YAML config file support with priority system
-- ✅ Docker Compose orchestration for full stack
 
 ## Completed Components
 
@@ -49,15 +49,25 @@ Successfully implemented a complete multi-tenant OpenTelemetry data ingestion an
 - **SQL Translator**: OQL to Pinot SQL with tenant isolation and operator conversion
 - **Query API**: HTTP endpoint (port 8080) with JSON interface
 - **Operator Fix**: Properly converts `==` to `=` for SQL
-- **Operations Supported**:
-  - `where` - Filter conditions (tested ✓)
-  - `expand trace` - Reconstruct full traces
-  - `correlate` - Cross-signal correlation
-  - `get_exemplars()` - Extract trace_ids from metrics (tested ✓)
-  - `switch_context` - Jump between signal types
-  - `extract` - Select fields
-  - `filter` - Refine results
-  - `limit` - Row limits (tested ✓)
+- **Core Operations**:
+  - `where` - Filter conditions with comparison/logical operators ✓
+  - `expand trace` - Reconstruct full traces (two-step execution) ✓
+  - `correlate` - Cross-signal correlation (two-step execution) ✓
+  - `get_exemplars()` - Extract trace_ids from metrics (the "wormhole") ✓
+  - `switch_context` - Jump between signal types ✓
+  - `extract` - Extract field values into aliases ✓
+  - `filter` - Progressive result refinement ✓
+  - `limit` - Row limits ✓
+- **Aggregation Operations**:
+  - `avg(field)` - Average values ✓
+  - `min(field)` - Minimum values ✓
+  - `max(field)` - Maximum values ✓
+  - `sum(field)` - Sum values ✓
+  - `count()` - Count rows ✓
+  - `group by` - Group results by fields ✓
+- **Time Functions**:
+  - `since` - Relative time ranges (1h, 30m, 2024-03-20) ✓
+  - `between` - Absolute time ranges (date1 and date2) ✓
 
 ### ✅ Configuration Management
 - **Config File Support**: YAML configuration with gopkg.in/yaml.v3
@@ -140,6 +150,8 @@ otel-oql/
 ## Git History
 
 ```
+0c52b22 - Fully implement correlate, extract, switch_context, filter operations plus add aggregation and time functions
+b57d516 - Update checkpoint to document pipe-optional OQL syntax
 9e946bc - Make pipe operators completely optional in OQL syntax
 01ec8dd - Update checkpoint to reflect 100% test pass rate
 bd4993d - Fix multi-tenant isolation and OQL expand operation - achieve 100% test pass rate
@@ -150,8 +162,6 @@ e41fc18 - Implement Kafka streaming, integration tests, and config file support
 f94988c - Update checkpoint with schema fix details
 f76a22c - Fix schema implementation with hybrid attribute storage
 15aecf9 - Document schema implementation gap and solution
-572bb27 - Add implementation checkpoint
-b89f4a3 - Add OQL query examples and documentation
 ```
 
 ## Testing Status
@@ -414,8 +424,9 @@ All dependencies use Apache 2.0 license as required:
 - [CLAUDE.md](./CLAUDE.md) - Detailed architecture documentation
 - [CONFIG.md](./CONFIG.md) - Configuration guide
 - [TESTING.md](./TESTING.md) - Testing documentation
-- [PINOT_LIMITATIONS.md](./PINOT_LIMITATIONS.md) - Pinot table types explained
+- [OQL_REFERENCE.md](./OQL_REFERENCE.md) - **Complete OQL language reference**
 - [examples/queries.md](./examples/queries.md) - OQL query examples
+- [PINOT_LIMITATIONS.md](./PINOT_LIMITATIONS.md) - Pinot table types explained
 
 ---
 
