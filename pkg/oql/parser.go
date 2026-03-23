@@ -33,7 +33,7 @@ func (p *Parser) Parse() (*Query, error) {
 	}
 
 	p.pos = 7 // skip "signal="
-	signalStr := p.readUntil([]string{"|", " where ", " expand ", " correlate ", " get_exemplars", " switch_context ", " extract ", " filter ", " limit ", "\n", ""})
+	signalStr := p.readUntil([]string{"|", " where ", " expand ", " correlate ", " get_exemplars", " switch_context ", " extract ", " filter ", " limit ", " aggregate ", " avg ", " min ", " max ", " count ", " sum ", " group ", " since ", " between ", "\n", ""})
 	signalStr = strings.TrimSpace(signalStr)
 
 	switch signalStr {
@@ -101,6 +101,14 @@ func (p *Parser) parseOperation() (Operation, error) {
 		return p.parseFilter()
 	case "limit":
 		return p.parseLimit()
+	case "aggregate", "avg", "min", "max", "count", "sum":
+		return p.parseAggregate()
+	case "group":
+		return p.parseGroupBy()
+	case "since":
+		return p.parseSince()
+	case "between":
+		return p.parseBetween()
 	default:
 		return nil, fmt.Errorf("unknown operation: %s", word)
 	}
@@ -122,7 +130,7 @@ func (p *Parser) parseWhere() (Operation, error) {
 // parseCondition parses a condition expression
 func (p *Parser) parseCondition() (Condition, error) {
 	// Read until pipe, operation keyword, or end
-	condStr := p.readUntil([]string{"|", " expand ", " correlate ", " get_exemplars", " switch_context ", " extract ", " filter ", " limit ", "\n", ""})
+	condStr := p.readUntil([]string{"|", " expand ", " correlate ", " get_exemplars", " switch_context ", " extract ", " filter ", " limit ", " aggregate ", " avg ", " min ", " max ", " count ", " sum ", " group ", " since ", " between ", "\n", ""})
 	condStr = strings.TrimSpace(condStr)
 
 	// Simple parsing: split by "and" and "or"
@@ -242,7 +250,7 @@ func (p *Parser) parseCorrelate() (Operation, error) {
 	p.consumeWord("correlate")
 	p.skipWhitespace()
 
-	signalsStr := p.readUntil([]string{"|", " expand ", " where ", " get_exemplars", " switch_context ", " extract ", " filter ", " limit ", "\n", ""})
+	signalsStr := p.readUntil([]string{"|", " expand ", " where ", " get_exemplars", " switch_context ", " extract ", " filter ", " limit ", " aggregate ", " avg ", " min ", " max ", " count ", " sum ", " group ", " since ", " between ", "\n", ""})
 	signalsStr = strings.TrimSpace(signalsStr)
 
 	// Split by comma
@@ -294,7 +302,7 @@ func (p *Parser) parseSwitchContext() (Operation, error) {
 	}
 	p.pos += 7 // skip "signal="
 
-	signalStr := p.readUntil([]string{"|", " where ", " expand ", " correlate ", " get_exemplars", " extract ", " filter ", " limit ", "\n", ""})
+	signalStr := p.readUntil([]string{"|", " where ", " expand ", " correlate ", " get_exemplars", " extract ", " filter ", " limit ", " aggregate ", " avg ", " min ", " max ", " count ", " sum ", " group ", " since ", " between ", "\n", ""})
 	signalStr = strings.TrimSpace(signalStr)
 
 	var signal SignalType
@@ -444,4 +452,106 @@ func parseDuration(s string) (time.Duration, error) {
 
 	// Use Go's duration parser for other formats
 	return time.ParseDuration(s)
+}
+
+// parseAggregate parses an aggregate operation
+func (p *Parser) parseAggregate() (Operation, error) {
+	// Can be: aggregate avg(duration), avg(duration), count(), etc.
+	funcName := p.readWord()
+
+	// If it's "aggregate", read the actual function
+	if funcName == "aggregate" {
+		p.skipWhitespace()
+		funcName = p.readWord()
+	}
+
+	p.skipWhitespace()
+
+	var field string
+	var alias string
+
+	// Check if there's a parenthesis (for field specification)
+	if p.peek() == '(' {
+		p.pos++ // consume '('
+		field = p.readUntil([]string{")", " as "})
+		field = strings.TrimSpace(field)
+
+		if p.peek() == ')' {
+			p.pos++ // consume ')'
+		}
+	}
+
+	p.skipWhitespace()
+
+	// Check for alias
+	if p.peekWord() == "as" {
+		p.consumeWord("as")
+		p.skipWhitespace()
+		alias = p.readWord()
+	}
+
+	return &AggregateOp{
+		Function: funcName,
+		Field:    field,
+		Alias:    alias,
+	}, nil
+}
+
+// parseGroupBy parses a group by operation
+func (p *Parser) parseGroupBy() (Operation, error) {
+	p.consumeWord("group")
+	p.skipWhitespace()
+
+	// Expect "by"
+	if p.peekWord() != "by" {
+		return nil, fmt.Errorf("group requires 'by' keyword")
+	}
+	p.consumeWord("by")
+	p.skipWhitespace()
+
+	// Read fields (comma-separated)
+	fieldsStr := p.readUntil([]string{"|", " aggregate ", " avg ", " min ", " max ", " count ", " sum ", " limit ", "\n", ""})
+	fieldsStr = strings.TrimSpace(fieldsStr)
+
+	// Split by comma
+	fieldStrs := strings.Split(fieldsStr, ",")
+	fields := make([]string, 0)
+	for _, f := range fieldStrs {
+		fields = append(fields, strings.TrimSpace(f))
+	}
+
+	return &GroupByOp{Fields: fields}, nil
+}
+
+// parseSince parses a since time range operation
+func (p *Parser) parseSince() (Operation, error) {
+	p.consumeWord("since")
+	p.skipWhitespace()
+
+	// Read duration or timestamp
+	duration := p.readWord()
+
+	return &SinceOp{Duration: duration}, nil
+}
+
+// parseBetween parses a between time range operation
+func (p *Parser) parseBetween() (Operation, error) {
+	p.consumeWord("between")
+	p.skipWhitespace()
+
+	// Read start time
+	start := p.readWord()
+	p.skipWhitespace()
+
+	// Expect "and"
+	if p.peekWord() != "and" {
+		return nil, fmt.Errorf("between requires 'and' keyword")
+	}
+	p.consumeWord("and")
+	p.skipWhitespace()
+
+	// Read end time
+	end := p.readWord()
+
+	return &BetweenOp{Start: start, End: end}, nil
 }

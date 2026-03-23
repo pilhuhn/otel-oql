@@ -76,6 +76,37 @@ type LimitOp struct {
 
 func (LimitOp) operation() {}
 
+// AggregateOp represents an aggregation operation
+type AggregateOp struct {
+	Function string   // avg, min, max, count, sum
+	Field    string   // field to aggregate (empty for count)
+	Alias    string   // optional alias for result
+}
+
+func (AggregateOp) operation() {}
+
+// GroupByOp represents a group by operation
+type GroupByOp struct {
+	Fields []string
+}
+
+func (GroupByOp) operation() {}
+
+// SinceOp represents a time range filter (since X)
+type SinceOp struct {
+	Duration string // e.g., "1h", "30m", "2024-03-20"
+}
+
+func (SinceOp) operation() {}
+
+// BetweenOp represents a time range filter (between X and Y)
+type BetweenOp struct {
+	Start string
+	End   string
+}
+
+func (BetweenOp) operation() {}
+
 // Condition represents a filter condition
 type Condition interface {
 	condition()

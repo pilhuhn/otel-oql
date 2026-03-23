@@ -51,14 +51,10 @@ func (t *Translator) TranslateQuery(query *oql.Query) ([]string, error) {
 			sql = expandSQL
 
 		case *oql.CorrelateOp:
-			// Correlate requires additional queries
-			correlateQueries, err := t.translateCorrelate(sql, v)
-			if err != nil {
-				return nil, fmt.Errorf("failed to translate correlate: %w", err)
-			}
-			queries = append(queries, sql)
-			queries = append(queries, correlateQueries...)
-			return queries, nil
+			// Correlate requires two-step execution like expand
+			// Use a special marker format
+			correlateSQL := t.translateCorrelate(sql, v, tableName)
+			sql = correlateSQL
 
 		case *oql.GetExemplarsOp:
 			// Get exemplars extracts trace_ids from metrics
@@ -81,6 +77,30 @@ func (t *Translator) TranslateQuery(query *oql.Query) ([]string, error) {
 				return nil, fmt.Errorf("failed to translate filter: %w", err)
 			}
 			sql += " AND " + filterSQL
+
+		case *oql.AggregateOp:
+			// Aggregate modifies the SELECT clause
+			sql = t.translateAggregate(sql, v)
+
+		case *oql.GroupByOp:
+			// Group by adds GROUP BY clause
+			sql = t.translateGroupBy(sql, v)
+
+		case *oql.SinceOp:
+			// Since adds time range filter
+			sinceSQL, err := t.translateSince(v)
+			if err != nil {
+				return nil, fmt.Errorf("failed to translate since: %w", err)
+			}
+			sql += " AND " + sinceSQL
+
+		case *oql.BetweenOp:
+			// Between adds time range filter
+			betweenSQL, err := t.translateBetween(v)
+			if err != nil {
+				return nil, fmt.Errorf("failed to translate between: %w", err)
+			}
+			sql += " AND " + betweenSQL
 
 		default:
 			return nil, fmt.Errorf("unsupported operation: %T", op)
@@ -246,25 +266,25 @@ func (t *Translator) translateExpand(tableName, baseSQL string, expand *oql.Expa
 }
 
 // translateCorrelate translates a correlate operation
-func (t *Translator) translateCorrelate(baseSQL string, correlate *oql.CorrelateOp) ([]string, error) {
-	queries := make([]string, 0)
+// Returns a special marker SQL that the API server will recognize and execute in two steps
+func (t *Translator) translateCorrelate(baseSQL string, correlate *oql.CorrelateOp, currentTable string) string {
+	// Pinot doesn't support subqueries in IN clauses, so we return a marker
+	// The API server will:
+	// 1. Execute the base query to get trace_ids
+	// 2. For each signal to correlate, build an IN clause with those trace_ids
+	// 3. Execute the queries and return combined results
 
-	// For each signal to correlate, generate a query that joins on trace_id
+	// Encode the signals as comma-separated list
+	signalNames := make([]string, 0)
 	for _, signal := range correlate.Signals {
-		tableName := t.getTableName(signal)
-
-		// Get trace_ids from the base query
-		sql := fmt.Sprintf(
-			"SELECT * FROM %s WHERE tenant_id = %d AND trace_id IN (SELECT DISTINCT trace_id FROM (%s))",
-			tableName,
-			t.tenantID,
-			baseSQL,
-		)
-
-		queries = append(queries, sql)
+		signalNames = append(signalNames, string(signal))
 	}
+	signals := strings.Join(signalNames, ",")
 
-	return queries, nil
+	// Use a special marker format: __CORRELATE__<signals>__BASE__<baseSQL>__TABLE__<currentTable>__END_CORRELATE__
+	sql := fmt.Sprintf("__CORRELATE__%s__BASE__%s__TABLE__%s__END_CORRELATE__", signals, baseSQL, currentTable)
+
+	return sql
 }
 
 // translateGetExemplars translates get_exemplars operation
@@ -294,4 +314,111 @@ func (t *Translator) getTableName(signal oql.SignalType) string {
 	default:
 		return "otel_spans"
 	}
+}
+
+// translateAggregate translates an aggregate operation
+func (t *Translator) translateAggregate(baseSQL string, agg *oql.AggregateOp) string {
+	// Build the aggregation function
+	var aggFunc string
+	switch strings.ToLower(agg.Function) {
+	case "avg":
+		aggFunc = fmt.Sprintf("AVG(%s)", agg.Field)
+	case "min":
+		aggFunc = fmt.Sprintf("MIN(%s)", agg.Field)
+	case "max":
+		aggFunc = fmt.Sprintf("MAX(%s)", agg.Field)
+	case "count":
+		if agg.Field == "" {
+			aggFunc = "COUNT(*)"
+		} else {
+			aggFunc = fmt.Sprintf("COUNT(%s)", agg.Field)
+		}
+	case "sum":
+		aggFunc = fmt.Sprintf("SUM(%s)", agg.Field)
+	default:
+		aggFunc = fmt.Sprintf("%s(%s)", strings.ToUpper(agg.Function), agg.Field)
+	}
+
+	// Add alias if specified
+	if agg.Alias != "" {
+		aggFunc = fmt.Sprintf("%s AS %s", aggFunc, agg.Alias)
+	}
+
+	// Replace SELECT * with the aggregation
+	sql := strings.Replace(baseSQL, "SELECT *", "SELECT "+aggFunc, 1)
+	return sql
+}
+
+// translateGroupBy translates a group by operation
+func (t *Translator) translateGroupBy(baseSQL string, groupBy *oql.GroupByOp) string {
+	// Add fields to SELECT if using SELECT *
+	if strings.Contains(baseSQL, "SELECT *") {
+		// Replace SELECT * with SELECT fields, aggregations
+		fields := strings.Join(groupBy.Fields, ", ")
+		baseSQL = strings.Replace(baseSQL, "SELECT *", "SELECT "+fields, 1)
+	}
+
+	// Add GROUP BY clause
+	groupByClause := " GROUP BY " + strings.Join(groupBy.Fields, ", ")
+	sql := baseSQL + groupByClause
+	return sql
+}
+
+// translateSince translates a since time range operation
+func (t *Translator) translateSince(since *oql.SinceOp) (string, error) {
+	duration := since.Duration
+
+	// Check if it's a relative duration (e.g., "1h", "30m")
+	if _, err := time.ParseDuration(duration); err == nil {
+		// It's a duration like "1h", "30m"
+		// Convert to milliseconds and subtract from current time
+		d, _ := time.ParseDuration(duration)
+		millis := d.Milliseconds()
+
+		// Use Pinot's timestamp functions
+		sql := fmt.Sprintf("timestamp >= (now() - %d)", millis)
+		return sql, nil
+	}
+
+	// Otherwise, try to parse as a timestamp (e.g., "2024-03-20")
+	// Pinot timestamps are in milliseconds since epoch
+	ts, err := time.Parse("2006-01-02", duration)
+	if err != nil {
+		// Try with time as well
+		ts, err = time.Parse("2006-01-02T15:04:05", duration)
+		if err != nil {
+			return "", fmt.Errorf("invalid time format in since: %s", duration)
+		}
+	}
+
+	millis := ts.UnixMilli()
+	sql := fmt.Sprintf("timestamp >= %d", millis)
+	return sql, nil
+}
+
+// translateBetween translates a between time range operation
+func (t *Translator) translateBetween(between *oql.BetweenOp) (string, error) {
+	// Parse start time
+	startTime, err := time.Parse("2006-01-02", between.Start)
+	if err != nil {
+		startTime, err = time.Parse("2006-01-02T15:04:05", between.Start)
+		if err != nil {
+			return "", fmt.Errorf("invalid start time format: %s", between.Start)
+		}
+	}
+
+	// Parse end time
+	endTime, err := time.Parse("2006-01-02", between.End)
+	if err != nil {
+		endTime, err = time.Parse("2006-01-02T15:04:05", between.End)
+		if err != nil {
+			return "", fmt.Errorf("invalid end time format: %s", between.End)
+		}
+	}
+
+	startMillis := startTime.UnixMilli()
+	endMillis := endTime.UnixMilli()
+
+	sql := fmt.Sprintf("timestamp >= %d AND timestamp <= %d", startMillis, endMillis)
+	return sql, nil
 }

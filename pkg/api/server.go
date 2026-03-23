@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 
 	"github.com/pilhuhn/otel-oql/pkg/oql"
 	"github.com/pilhuhn/otel-oql/pkg/pinot"
@@ -129,13 +130,21 @@ func (s *Server) handleQuery(w http.ResponseWriter, r *http.Request) {
 		if result, err := s.executeExpandQuery(r.Context(), sql, tenantID); err == nil {
 			results = append(results, result)
 		} else if err.Error() == "not an expand query" {
-			// Regular query
-			result, err := s.executeQuery(r.Context(), sql)
-			if err != nil {
-				s.sendErrorResponse(w, fmt.Sprintf("failed to execute query: %v", err))
+			// Check if this is a correlate operation (marker format)
+			if correlateResults, err := s.executeCorrelateQuery(r.Context(), sql, tenantID); err == nil {
+				results = append(results, correlateResults...)
+			} else if err.Error() == "not a correlate query" {
+				// Regular query
+				result, err := s.executeQuery(r.Context(), sql)
+				if err != nil {
+					s.sendErrorResponse(w, fmt.Sprintf("failed to execute query: %v", err))
+					return
+				}
+				results = append(results, result)
+			} else {
+				s.sendErrorResponse(w, fmt.Sprintf("failed to execute correlate query: %v", err))
 				return
 			}
-			results = append(results, result)
 		} else {
 			s.sendErrorResponse(w, fmt.Sprintf("failed to execute expand query: %v", err))
 			return
@@ -303,6 +312,175 @@ func join(strings []string, sep string) string {
 		result += sep + strings[i]
 	}
 	return result
+}
+
+// executeCorrelateQuery executes a correlate operation in two steps
+// Returns error "not a correlate query" if the SQL is not a correlate marker
+func (s *Server) executeCorrelateQuery(ctx context.Context, sql string, tenantID int) ([]QueryResult, error) {
+	// Check if this is a correlate marker
+	const correlatePrefix = "__CORRELATE__"
+	const baseMarker = "__BASE__"
+	const tableMarker = "__TABLE__"
+	const correlateSuffix = "__END_CORRELATE__"
+
+	if len(sql) < len(correlatePrefix)+len(correlateSuffix) {
+		return nil, fmt.Errorf("not a correlate query")
+	}
+
+	if sql[:len(correlatePrefix)] != correlatePrefix {
+		return nil, fmt.Errorf("not a correlate query")
+	}
+
+	// Parse the marker format: __CORRELATE__<signals>__BASE__<baseSQL>__TABLE__<currentTable>__END_CORRELATE__
+	rest := sql[len(correlatePrefix):]
+
+	// Find __BASE__ marker
+	baseIdx := -1
+	for i := 0; i < len(rest)-len(baseMarker); i++ {
+		if rest[i:i+len(baseMarker)] == baseMarker {
+			baseIdx = i
+			break
+		}
+	}
+
+	if baseIdx == -1 {
+		return nil, fmt.Errorf("base marker not found in correlate query")
+	}
+
+	signals := rest[:baseIdx]
+	rest = rest[baseIdx+len(baseMarker):]
+
+	// Find __TABLE__ marker
+	tableIdx := -1
+	for i := 0; i < len(rest)-len(tableMarker); i++ {
+		if rest[i:i+len(tableMarker)] == tableMarker {
+			tableIdx = i
+			break
+		}
+	}
+
+	if tableIdx == -1 {
+		return nil, fmt.Errorf("table marker not found in correlate query")
+	}
+
+	baseSQL := rest[:tableIdx]
+	rest = rest[tableIdx+len(tableMarker):]
+	currentTable := rest[:len(rest)-len(correlateSuffix)]
+
+	// Step 1: Execute base query to get trace_ids
+	fmt.Printf("DEBUG CORRELATE: Executing base query to get trace_ids\n")
+	resp1, err := s.pinotClient.Query(ctx, baseSQL)
+	if err != nil {
+		return nil, fmt.Errorf("failed to execute base query for correlate: %w", err)
+	}
+
+	// Step 2: Extract unique trace_ids from results
+	traceIDSet := make(map[string]bool)
+	traceIDColIdx := -1
+
+	// Find trace_id column index
+	for i, colName := range resp1.ResultTable.DataSchema.ColumnNames {
+		if colName == "trace_id" {
+			traceIDColIdx = i
+			break
+		}
+	}
+
+	if traceIDColIdx == -1 {
+		return nil, fmt.Errorf("trace_id column not found in base query results")
+	}
+
+	// Collect unique trace_ids (filter out empty strings)
+	for _, row := range resp1.ResultTable.Rows {
+		if traceIDColIdx < len(row) {
+			if traceID, ok := row[traceIDColIdx].(string); ok && traceID != "" {
+				traceIDSet[traceID] = true
+			}
+		}
+	}
+
+	if len(traceIDSet) == 0 {
+		// No trace_ids found, return empty result
+		return []QueryResult{}, nil
+	}
+
+	// Build IN clause with trace_ids
+	traceIDs := make([]string, 0, len(traceIDSet))
+	for traceID := range traceIDSet {
+		traceIDs = append(traceIDs, fmt.Sprintf("'%s'", traceID))
+	}
+	traceIDsIN := join(traceIDs, ", ")
+
+	// Step 3: Query each signal to correlate
+	signalList := strings.Split(signals, ",")
+	results := make([]QueryResult, 0)
+
+	// Include the base query results first
+	baseResult := QueryResult{
+		SQL:     baseSQL,
+		Columns: resp1.ResultTable.DataSchema.ColumnNames,
+		Rows:    resp1.ResultTable.Rows,
+		Stats: QueryStats{
+			NumDocsScanned: resp1.NumDocsScanned,
+			TotalDocs:      resp1.TotalDocs,
+			TimeUsedMs:     resp1.TimeUsedMs,
+		},
+	}
+	results = append(results, baseResult)
+
+	// Query correlated signals
+	for _, signal := range signalList {
+		signal = strings.TrimSpace(signal)
+		tableName := s.getTableNameForSignal(signal)
+
+		// Skip if it's the same table as current
+		if tableName == currentTable {
+			continue
+		}
+
+		correlateSQL := fmt.Sprintf(
+			"SELECT * FROM %s WHERE tenant_id = %d AND trace_id IN (%s)",
+			tableName,
+			tenantID,
+			traceIDsIN,
+		)
+
+		fmt.Printf("DEBUG CORRELATE: Executing query for signal %s\n", signal)
+
+		resp, err := s.pinotClient.Query(ctx, correlateSQL)
+		if err != nil {
+			fmt.Printf("DEBUG CORRELATE: Failed to query %s: %v\n", signal, err)
+			continue // Skip this signal but continue with others
+		}
+
+		result := QueryResult{
+			SQL:     correlateSQL,
+			Columns: resp.ResultTable.DataSchema.ColumnNames,
+			Rows:    resp.ResultTable.Rows,
+			Stats: QueryStats{
+				NumDocsScanned: resp.NumDocsScanned,
+				TotalDocs:      resp.TotalDocs,
+				TimeUsedMs:     resp.TimeUsedMs,
+			},
+		}
+		results = append(results, result)
+	}
+
+	return results, nil
+}
+
+// getTableNameForSignal maps a signal name to a Pinot table name
+func (s *Server) getTableNameForSignal(signal string) string {
+	switch signal {
+	case "metrics":
+		return "otel_metrics"
+	case "logs":
+		return "otel_logs"
+	case "spans", "traces":
+		return "otel_spans"
+	default:
+		return "otel_spans"
+	}
 }
 
 // sendErrorResponse sends an error response
