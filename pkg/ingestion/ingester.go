@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	"github.com/IBM/sarama"
+	"github.com/pilhuhn/otel-oql/pkg/observability"
 	"go.opentelemetry.io/collector/pdata/plog"
 	"go.opentelemetry.io/collector/pdata/pmetric"
 	"go.opentelemetry.io/collector/pdata/ptrace"
@@ -14,10 +15,11 @@ import (
 // Ingester handles data ingestion to Kafka
 type Ingester struct {
 	producer sarama.SyncProducer
+	obs      *observability.Observability
 }
 
 // NewIngester creates a new ingester with Kafka producer
-func NewIngester(kafkaBrokers string) (*Ingester, error) {
+func NewIngester(kafkaBrokers string, obs *observability.Observability) (*Ingester, error) {
 	config := sarama.NewConfig()
 	config.Producer.Return.Successes = true
 	config.Producer.RequiredAcks = sarama.WaitForLocal
@@ -31,6 +33,7 @@ func NewIngester(kafkaBrokers string) (*Ingester, error) {
 
 	return &Ingester{
 		producer: producer,
+		obs:      obs,
 	}, nil
 }
 
@@ -43,6 +46,9 @@ func (i *Ingester) Close() {
 
 // IngestTraces ingests traces into Pinot
 func (i *Ingester) IngestTraces(ctx context.Context, tenantID int, traces ptrace.Traces) error {
+	ctx, span := i.obs.Tracer().Start(ctx, "ingestion.traces")
+	defer span.End()
+
 	records := make([]map[string]interface{}, 0)
 
 	for k := 0; k < traces.ResourceSpans().Len(); k++ {
@@ -123,11 +129,19 @@ func (i *Ingester) IngestTraces(ctx context.Context, tenantID int, traces ptrace
 	}
 
 	fmt.Printf("DEBUG INGESTER: Successfully published %d spans to Kafka\n", len(records))
+
+	// Record observability metrics
+	i.obs.RecordIngestion(ctx, "spans", int64(len(records)))
+	i.obs.RecordKafkaPublish(ctx, "otel-spans", int64(len(records)))
+
 	return nil
 }
 
 // IngestMetrics ingests metrics into Pinot
 func (i *Ingester) IngestMetrics(ctx context.Context, tenantID int, metrics pmetric.Metrics) error {
+	ctx, span := i.obs.Tracer().Start(ctx, "ingestion.metrics")
+	defer span.End()
+
 	records := make([]map[string]interface{}, 0)
 
 	for k := 0; k < metrics.ResourceMetrics().Len(); k++ {
@@ -182,11 +196,19 @@ func (i *Ingester) IngestMetrics(ctx context.Context, tenantID int, metrics pmet
 	}
 
 	fmt.Printf("DEBUG INGESTER: Successfully published %d metrics to Kafka\n", len(records))
+
+	// Record observability metrics
+	i.obs.RecordIngestion(ctx, "metrics", int64(len(records)))
+	i.obs.RecordKafkaPublish(ctx, "otel-metrics", int64(len(records)))
+
 	return nil
 }
 
 // IngestLogs ingests logs into Pinot
 func (i *Ingester) IngestLogs(ctx context.Context, tenantID int, logs plog.Logs) error {
+	ctx, span := i.obs.Tracer().Start(ctx, "ingestion.logs")
+	defer span.End()
+
 	records := make([]map[string]interface{}, 0)
 
 	for k := 0; k < logs.ResourceLogs().Len(); k++ {
@@ -254,6 +276,11 @@ func (i *Ingester) IngestLogs(ctx context.Context, tenantID int, logs plog.Logs)
 	}
 
 	fmt.Printf("DEBUG INGESTER: Successfully published %d logs to Kafka\n", len(records))
+
+	// Record observability metrics
+	i.obs.RecordIngestion(ctx, "logs", int64(len(records)))
+	i.obs.RecordKafkaPublish(ctx, "otel-logs", int64(len(records)))
+
 	return nil
 }
 

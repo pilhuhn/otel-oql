@@ -27,6 +27,11 @@ type Config struct {
 
 	// Query API
 	QueryAPIPort int `yaml:"query_api_port"`
+
+	// Observability (self-instrumentation)
+	ObservabilityEnabled  bool   `yaml:"observability_enabled"`  // Enable self-observability
+	ObservabilityEndpoint string `yaml:"observability_endpoint"` // OTLP gRPC endpoint (default: localhost:4317)
+	ObservabilityTenantID string `yaml:"observability_tenant_id"` // Tenant ID for self-observability (default: "0" in test mode)
 }
 
 // Load reads configuration from config file, environment variables, and command-line flags
@@ -45,6 +50,9 @@ func Load() (*Config, error) {
 	var otlpHTTPPort int
 	var queryAPIPort int
 	var testMode bool
+	var obsEnabled bool
+	var obsEndpoint string
+	var obsTenantID string
 
 	flag.StringVar(&pinotURL, "pinot-url", "", "Apache Pinot broker URL")
 	flag.StringVar(&kafkaBrokers, "kafka-brokers", "", "Kafka broker addresses")
@@ -52,6 +60,9 @@ func Load() (*Config, error) {
 	flag.IntVar(&otlpHTTPPort, "otlp-http-port", 0, "OTLP HTTP receiver port")
 	flag.BoolVar(&testMode, "test-mode", false, "Enable test mode (default tenant-id=0)")
 	flag.IntVar(&queryAPIPort, "query-api-port", 0, "Query API server port")
+	flag.BoolVar(&obsEnabled, "observability-enabled", false, "Enable self-observability")
+	flag.StringVar(&obsEndpoint, "observability-endpoint", "", "OTLP endpoint for self-observability")
+	flag.StringVar(&obsTenantID, "observability-tenant-id", "", "Tenant ID for self-observability")
 
 	flag.Parse()
 
@@ -87,6 +98,17 @@ func Load() (*Config, error) {
 			cfg.TestMode = val
 		}
 	}
+	if env := os.Getenv("OBSERVABILITY_ENABLED"); env != "" {
+		if val, err := strconv.ParseBool(env); err == nil {
+			cfg.ObservabilityEnabled = val
+		}
+	}
+	if env := os.Getenv("OBSERVABILITY_ENDPOINT"); env != "" {
+		cfg.ObservabilityEndpoint = env
+	}
+	if env := os.Getenv("OBSERVABILITY_TENANT_ID"); env != "" {
+		cfg.ObservabilityTenantID = env
+	}
 
 	// 3. Override with CLI flags (if provided)
 	if pinotURL != "" {
@@ -108,6 +130,16 @@ func Load() (*Config, error) {
 	if flag.Lookup("test-mode").Value.String() == "true" {
 		cfg.TestMode = true
 	}
+	// observability flags
+	if flag.Lookup("observability-enabled").Value.String() == "true" {
+		cfg.ObservabilityEnabled = true
+	}
+	if obsEndpoint != "" {
+		cfg.ObservabilityEndpoint = obsEndpoint
+	}
+	if obsTenantID != "" {
+		cfg.ObservabilityTenantID = obsTenantID
+	}
 
 	// Apply defaults if still not set
 	if cfg.PinotURL == "" {
@@ -124,6 +156,17 @@ func Load() (*Config, error) {
 	}
 	if cfg.QueryAPIPort == 0 {
 		cfg.QueryAPIPort = 8080
+	}
+	// Observability defaults
+	if cfg.ObservabilityEndpoint == "" {
+		cfg.ObservabilityEndpoint = "localhost:4317"
+	}
+	if cfg.ObservabilityTenantID == "" {
+		if cfg.TestMode {
+			cfg.ObservabilityTenantID = "0"
+		} else {
+			cfg.ObservabilityTenantID = "0" // Default to tenant 0 for self-observability
+		}
 	}
 
 	// Validate configuration

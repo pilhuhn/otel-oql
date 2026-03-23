@@ -1,19 +1,21 @@
 # OTEL-OQL Implementation Checkpoint
 
 **Date**: March 23, 2026
-**Status**: ✅ Production-Ready with Streaming & Testing
-**Last Updated**: March 23, 2026 (100% Test Pass Rate - All Critical Bugs Fixed)
+**Status**: ✅ Production-Ready with Streaming, Testing & Observability
+**Last Updated**: March 23, 2026 (100% Test Pass Rate + Self-Observability Implemented)
 
 ## Summary
 
 Successfully implemented a complete multi-tenant OpenTelemetry data ingestion and query service with OQL (Observability Query Language) support, backed by Apache Pinot with Kafka streaming. The service includes comprehensive integration tests (100% pass rate), YAML config file support, and debug logging throughout the pipeline.
 
 **Latest Major Updates**:
+- ✅ **CLI Query Tool** - Interactive command-line client for OQL queries (NEW)
+- ✅ **Self-Observability** - Full OpenTelemetry instrumentation with traces and metrics
 - ✅ **Complete OQL Implementation** - All operations fully functional with aggregations & time functions
 - ✅ **Aggregation Support** - avg, min, max, sum, count with group by
 - ✅ **Time Functions** - since (relative) and between (absolute) time ranges
 - ✅ **Pipe-Optional OQL Syntax** - Pipes (`|`) now completely optional for cleaner queries
-- ✅ **100% Test Pass Rate** - All 8 integration tests passing
+- ✅ **100% Test Pass Rate** - All 23 integration tests passing
 - ✅ Multi-tenant isolation fixed across all signals
 - ✅ Kafka streaming integration with REALTIME Pinot tables
 
@@ -76,6 +78,31 @@ Successfully implemented a complete multi-tenant OpenTelemetry data ingestion an
 - **Example Config**: otel-oql.yaml included in repo
 - **Documentation**: CONFIG.md with comprehensive examples
 
+### ✅ Observability & Self-Instrumentation (NEW)
+- **OpenTelemetry Integration**: Full OTLP exporter setup for traces and metrics
+- **Tracer Provider**: Batch span processor with OTLP gRPC exporter
+- **Meter Provider**: Periodic metric reader (10-second interval)
+- **Tenant ID Injection**: gRPC unary interceptor adds tenant-id to outgoing metadata
+- **Instrumented Components**:
+  - **gRPC Receiver**: Traces for each export operation (traces/metrics/logs), request metrics, error tracking
+  - **HTTP Receiver**: Traces for each export operation, request latency, error recording
+  - **Ingestion Pipeline**: Traces for data transformation, ingestion volume metrics, Kafka publish counts
+  - **Query API**: Traces for query execution, query duration metrics, parse/translate/execute errors
+- **Configuration Options**:
+  - `observability_enabled` - Enable/disable self-observability (default: false)
+  - `observability_endpoint` - OTLP gRPC endpoint (default: localhost:4317)
+  - `observability_tenant_id` - Tenant ID for self-observability data (default: "0")
+- **Metrics Exported**:
+  - `otel_oql.requests.total` - HTTP/gRPC request counter with endpoint and status_code labels
+  - `otel_oql.request.duration` - Request latency histogram in milliseconds
+  - `otel_oql.ingestion.total` - Signals ingested counter with signal_type label
+  - `otel_oql.ingestion.size` - Batch size histogram
+  - `otel_oql.queries.total` - OQL query counter with query_type and success labels
+  - `otel_oql.query.duration` - Query execution time histogram
+  - `otel_oql.errors.total` - Error counter with error_type and component labels
+  - `otel_oql.kafka.published.total` - Kafka messages published with topic label
+- **Graceful Shutdown**: Proper cleanup of tracer and meter providers on service shutdown
+
 ### ✅ Testing Infrastructure
 - **Integration Tests**: 8 E2E tests in pkg/integration/
 - **Pass Rate**: 6/8 tests passing (75%)
@@ -84,10 +111,45 @@ Successfully implemented a complete multi-tenant OpenTelemetry data ingestion an
 - **Manual Testing**: cmd/send-test-data/ for manual verification
 - **Test Documentation**: TESTING.md with strategy and examples
 
+### ✅ Observability & Self-Instrumentation
+- **OpenTelemetry Integration**: Full OTLP trace and metric exporters
+- **Trace Instrumentation**: Spans for all ingestion and query operations
+- **Metrics Collection**: Request counts, durations, ingestion volumes, Kafka publishes
+- **Tenant ID Injection**: gRPC interceptor adds tenant-id to outgoing observability data
+- **Error Tracking**: Comprehensive error recording across all components
+- **Configuration**: Enable/disable via config, set custom endpoint and tenant-id
+- **Pre-configured Metrics**:
+  - `otel_oql.requests.total` - HTTP/gRPC request counter
+  - `otel_oql.request.duration` - Request latency histogram
+  - `otel_oql.ingestion.total` - Signals ingested by type
+  - `otel_oql.ingestion.size` - Batch sizes
+  - `otel_oql.queries.total` - OQL query counter
+  - `otel_oql.query.duration` - Query execution time
+  - `otel_oql.errors.total` - Error counter by type and component
+  - `otel_oql.kafka.published.total` - Messages published to Kafka
+
+### ✅ CLI Query Tool (NEW)
+- **Command-Line Client**: `oql-cli` - Interactive OQL query tool
+- **Multiple Input Modes**:
+  - Direct query as command argument: `oql-cli "signal=spans limit 10"`
+  - Stdin piping: `echo "query" | oql-cli`
+  - Interactive mode: Multi-line input with Ctrl+D to submit
+- **Output Formats**:
+  - Table format (default): Human-readable tabular output
+  - Verbose mode: Includes generated SQL and query statistics
+  - JSON mode: Raw JSON for programmatic processing
+- **Configuration Flags**:
+  - `--endpoint`: OTEL-OQL API endpoint (default: localhost:8080)
+  - `--tenant-id`: Tenant ID for isolation (default: "0")
+  - `--verbose`: Show SQL and stats
+  - `--json`: Output raw JSON
+- **Scripting-Friendly**: Easy integration with shell scripts and pipelines
+- **Documentation**: Complete README with examples in cmd/oql-cli/
+
 ### ✅ Operations & Debugging
 - **Debug Logging**: Throughout main, receivers, and ingester
 - **Panic Recovery**: Stack traces on unexpected exits
-- **Graceful Shutdown**: Proper cleanup of all services
+- **Graceful Shutdown**: Proper cleanup of all services (including observability providers)
 - **Health Monitoring**: Service startup verification
 - **License Compliance**: All dependencies use Apache 2.0
 
@@ -99,21 +161,26 @@ otel-oql/
 │   ├── otel-oql/              # Main application
 │   │   ├── main.go            # Entry point with debug logging
 │   │   └── setup_schema.go    # Schema initialization
-│   └── send-test-data/        # Manual test data generator (NEW)
+│   ├── oql-cli/               # CLI query tool (NEW)
+│   │   ├── main.go            # Command-line OQL client
+│   │   └── README.md          # CLI documentation
+│   └── send-test-data/        # Manual test data generator
 │       └── main.go
 ├── internal/config/           # Configuration management
 │   └── config.go              # YAML config + CLI + env support (UPDATED)
 ├── pkg/
 │   ├── api/                   # Query API server
-│   │   └── server.go          # Includes expand & correlate two-step execution (UPDATED)
+│   │   └── server.go          # Includes expand & correlate two-step execution + observability (UPDATED)
 │   ├── ingestion/             # Data ingestion pipeline
-│   │   ├── ingester.go        # Kafka producer integration (UPDATED)
+│   │   ├── ingester.go        # Kafka producer integration + observability (UPDATED)
 │   │   └── attributes.go      # Attribute extraction helpers
 │   ├── integration/           # Integration tests (NEW)
 │   │   ├── integration_test.go
 │   │   ├── e2e_test.go        # Core E2E tests (8 tests)
 │   │   ├── new_operations_test.go  # New OQL operations tests (15 tests) (NEW)
 │   │   └── helpers_test.go
+│   ├── observability/         # Self-instrumentation (NEW)
+│   │   └── observability.go   # OpenTelemetry setup with traces & metrics
 │   ├── oql/                   # OQL parser
 │   │   ├── ast.go
 │   │   ├── parser.go
@@ -122,8 +189,8 @@ otel-oql/
 │   │   ├── client.go
 │   │   └── schema.go          # REALTIME table configs (UPDATED)
 │   ├── receiver/              # OTLP receivers
-│   │   ├── grpc.go
-│   │   └── http.go            # Debug logging added (UPDATED)
+│   │   ├── grpc.go            # With observability instrumentation (UPDATED)
+│   │   └── http.go            # Debug logging + observability (UPDATED)
 │   ├── tenant/                # Multi-tenant validation
 │   │   ├── grpc.go
 │   │   ├── http.go
@@ -284,6 +351,9 @@ GROUP BY service_name
 - `OTLP_HTTP_PORT` - HTTP receiver port (default: 4318)
 - `QUERY_API_PORT` - Query API port (default: 8080)
 - `TEST_MODE` - Enable test mode (default: false)
+- `OBSERVABILITY_ENABLED` - Enable self-observability (default: false)
+- `OBSERVABILITY_ENDPOINT` - OTLP endpoint for self-observability (default: localhost:4317)
+- `OBSERVABILITY_TENANT_ID` - Tenant ID for self-observability data (default: "0")
 
 ## Running the Service
 
@@ -301,6 +371,9 @@ go build -o otel-oql ./cmd/otel-oql
 
 # 4. Run service (uses otel-oql.yaml config)
 ./otel-oql
+
+# Optional: Enable self-observability
+./otel-oql --observability-enabled
 ```
 
 ### Verify Installation
@@ -315,17 +388,23 @@ curl http://localhost:8080/health
 # Send test data
 go run cmd/send-test-data/main.go
 
-# Query via OQL (pipes optional)
+# Query via CLI tool (easiest method)
+./oql-cli --tenant-id=0 "signal=spans limit 10"
+
+# Verbose output with SQL and stats
+./oql-cli --tenant-id=0 --verbose "signal=spans since 1h"
+
+# Interactive mode for multi-line queries
+./oql-cli --tenant-id=0
+
+# Query via HTTP API (using curl)
 curl -X POST http://localhost:8080/query \
   -H 'X-Tenant-ID: 0' \
   -H 'Content-Type: application/json' \
   -d '{"query": "signal=spans limit 10"}'
 
-# Or with pipes (both work identically)
-curl -X POST http://localhost:8080/query \
-  -H 'X-Tenant-ID: 0' \
-  -H 'Content-Type: application/json' \
-  -d '{"query": "signal=spans | limit 10"}'
+# Query self-observability data (if observability enabled)
+./oql-cli --tenant-id=0 "signal=spans where service_name == \"otel-oql\" since 5m"
 ```
 
 ### Run Integration Tests
@@ -390,6 +469,9 @@ otel_logs (REALTIME)
 All dependencies use Apache 2.0 license as required:
 - `google.golang.org/grpc` - Apache 2.0
 - `go.opentelemetry.io/collector` - Apache 2.0
+- `go.opentelemetry.io/otel` - Apache 2.0 (OpenTelemetry SDK)
+- `go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc` - Apache 2.0
+- `go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetricgrpc` - Apache 2.0
 - `github.com/IBM/sarama` - Apache 2.0 (Kafka client)
 - `gopkg.in/yaml.v3` - Apache 2.0 / MIT
 - Standard library packages
@@ -435,15 +517,16 @@ All dependencies use Apache 2.0 license as required:
 4. ✅ ~~**Aggregation Functions**: Add avg, min, max, sum, count, group by~~ - **COMPLETED**
 5. ✅ ~~**Time Functions**: Add since and between operations~~ - **COMPLETED**
 6. ✅ ~~**Comprehensive Testing**: Add integration tests for all new operations~~ - **COMPLETED**
-7. **Performance Testing**: Load test with realistic data volumes
-8. **Query Optimization**: Add caching for expand/correlate operations
-9. **Error Handling**: Improve error messages and recovery
+7. ✅ ~~**Observability**: Add OpenTelemetry instrumentation with traces and metrics~~ - **COMPLETED**
+8. **Performance Testing**: Load test with realistic data volumes
+9. **Query Optimization**: Add caching for expand/correlate operations
+10. **Error Handling**: Improve error messages and recovery
 
 ### Medium Priority
-5. **Observability**: Add structured logging and metrics
-6. **Health Checks**: Comprehensive health endpoints
-7. **Query Limits**: Add timeout and complexity limits
-8. **Documentation**: API reference and deployment guide
+5. **Health Checks**: Comprehensive health endpoints
+6. **Query Limits**: Add timeout and complexity limits
+7. **Documentation**: API reference and deployment guide
+8. **Structured Logging**: Replace fmt.Printf with proper logging library
 
 ### Low Priority
 9. **Parser Improvements**: Use proper lexer/parser (e.g., participle)
@@ -453,15 +536,18 @@ All dependencies use Apache 2.0 license as required:
 
 ## Critical Files for Future Development
 
-1. **pkg/ingestion/ingester.go** - Kafka producer integration, attribute extraction
+1. **pkg/ingestion/ingester.go** - Kafka producer integration, attribute extraction, observability
 2. **pkg/pinot/schema.go** - REALTIME table configurations with streamConfigs
 3. **pkg/translator/translator.go** - SQL generation with operator conversion
 4. **pkg/oql/parser.go** - OQL syntax parsing
-5. **pkg/receiver/http.go** - OTLP HTTP receiver with debug logging
-6. **internal/config/config.go** - Config file + CLI + env priority system
-7. **pkg/integration/** - Integration test suite
-8. **CONFIG.md** - Configuration guide
-9. **TESTING.md** - Testing strategy
+5. **pkg/receiver/http.go** - OTLP HTTP receiver with debug logging and observability
+6. **pkg/receiver/grpc.go** - OTLP gRPC receiver with observability instrumentation
+7. **pkg/observability/observability.go** - OpenTelemetry setup with traces and metrics
+8. **pkg/api/server.go** - Query API with observability instrumentation
+9. **internal/config/config.go** - Config file + CLI + env priority system
+10. **pkg/integration/** - Integration test suite
+11. **CONFIG.md** - Configuration guide
+12. **TESTING.md** - Testing strategy
 
 ## Production Readiness Checklist
 
@@ -469,14 +555,15 @@ All dependencies use Apache 2.0 license as required:
 - ✅ OTLP receivers (gRPC + HTTP)
 - ✅ Kafka streaming integration
 - ✅ Pinot REALTIME tables
-- ✅ OQL query engine with expand operation
+- ✅ OQL query engine with all operations
 - ✅ Config file support (YAML + CLI + env vars)
-- ✅ Integration tests (100% passing - 8/8)
+- ✅ Integration tests (100% passing - 23/23)
 - ✅ Debug logging throughout pipeline
 - ✅ Docker Compose setup for development
+- ✅ Self-observability with OpenTelemetry (traces & metrics)
 - ⚠️ Performance testing needed
 - ⚠️ Production error handling improvements
-- ⚠️ Monitoring/observability instrumentation
+- ⚠️ Health check endpoints
 
 ## Resources
 
@@ -488,6 +575,7 @@ All dependencies use Apache 2.0 license as required:
 - [CONFIG.md](./CONFIG.md) - Configuration guide
 - [TESTING.md](./TESTING.md) - Testing documentation
 - [OQL_REFERENCE.md](./OQL_REFERENCE.md) - **Complete OQL language reference**
+- [cmd/oql-cli/README.md](./cmd/oql-cli/README.md) - **CLI query tool documentation**
 - [examples/queries.md](./examples/queries.md) - OQL query examples
 - [PINOT_LIMITATIONS.md](./PINOT_LIMITATIONS.md) - Pinot table types explained
 
@@ -496,4 +584,6 @@ All dependencies use Apache 2.0 license as required:
 **Checkpoint created**: March 23, 2026
 **Test Status**: ✅ 100% Pass Rate (23/23 tests passing - 8 E2E + 15 OQL operations)
 **OQL Implementation**: ✅ Complete - All operations fully functional with tests
-**Next session should focus on**: Performance testing, production hardening, monitoring/observability instrumentation
+**Observability**: ✅ Complete - Full OpenTelemetry instrumentation with traces and metrics
+**CLI Tool**: ✅ Complete - Interactive command-line query client (oql-cli)
+**Next session should focus on**: Performance testing, production hardening, health check endpoints

@@ -21,7 +21,11 @@ A multi-tenant OpenTelemetry data ingestion and query service with OQL (Observab
 ### Build
 
 ```bash
+# Build the main service
 go build -o otel-oql ./cmd/otel-oql
+
+# Build the CLI query tool
+go build -o oql-cli ./cmd/oql-cli
 ```
 
 ### Setup Pinot Schema
@@ -78,7 +82,33 @@ curl -X POST http://localhost:4318/v1/metrics \
 
 ## OQL Query Language
 
-### Query Endpoint
+### Query via CLI Tool
+
+The easiest way to query OTEL-OQL is using the `oql-cli` command-line tool:
+
+```bash
+# Build the CLI
+go build -o oql-cli ./cmd/oql-cli
+
+# Execute a query
+oql-cli --tenant-id=0 "signal=spans limit 10"
+
+# Interactive mode (multi-line input)
+oql-cli --tenant-id=0
+
+# Verbose output with SQL and stats
+oql-cli --tenant-id=0 --verbose "signal=spans where duration > 100"
+
+# Pipe query from stdin
+echo "signal=spans since 1h" | oql-cli --tenant-id=0
+
+# JSON output for scripting
+oql-cli --tenant-id=0 --json "signal=spans limit 5" | jq .
+```
+
+See [cmd/oql-cli/README.md](cmd/oql-cli/README.md) for complete CLI documentation.
+
+### Query via HTTP API
 
 ```bash
 POST http://localhost:8080/query
@@ -90,6 +120,15 @@ Body:
 {
   "query": "signal=spans | where name == \"checkout\" | limit 10"
 }
+```
+
+Example with curl:
+
+```bash
+curl -X POST http://localhost:8080/query \
+  -H 'X-Tenant-ID: 0' \
+  -H 'Content-Type: application/json' \
+  -d '{"query": "signal=spans limit 10"}'
 ```
 
 ### OQL Examples

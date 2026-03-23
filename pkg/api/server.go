@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"time"
 
+	"github.com/pilhuhn/otel-oql/pkg/observability"
 	"github.com/pilhuhn/otel-oql/pkg/oql"
 	"github.com/pilhuhn/otel-oql/pkg/pinot"
 	"github.com/pilhuhn/otel-oql/pkg/tenant"
@@ -19,14 +21,16 @@ type Server struct {
 	validator    *tenant.Validator
 	pinotClient  *pinot.Client
 	httpServer   *http.Server
+	obs          *observability.Observability
 }
 
 // NewServer creates a new query API server
-func NewServer(port int, validator *tenant.Validator, pinotClient *pinot.Client) *Server {
+func NewServer(port int, validator *tenant.Validator, pinotClient *pinot.Client, obs *observability.Observability) *Server {
 	return &Server{
 		port:        port,
 		validator:   validator,
 		pinotClient: pinotClient,
+		obs:         obs,
 	}
 }
 
@@ -88,7 +92,12 @@ type QueryStats struct {
 
 // handleQuery handles OQL query requests
 func (s *Server) handleQuery(w http.ResponseWriter, r *http.Request) {
+	start := time.Now()
+	ctx, span := s.obs.Tracer().Start(r.Context(), "api.query")
+	defer span.End()
+
 	if r.Method != http.MethodPost {
+		s.obs.RecordRequest(ctx, "/query", time.Since(start), http.StatusMethodNotAllowed)
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
@@ -96,6 +105,8 @@ func (s *Server) handleQuery(w http.ResponseWriter, r *http.Request) {
 	// Get tenant ID from context
 	tenantID, ok := tenant.FromContext(r.Context())
 	if !ok {
+		s.obs.RecordError(ctx, "missing_tenant_id", "api_server")
+		s.obs.RecordRequest(ctx, "/query", time.Since(start), http.StatusUnauthorized)
 		http.Error(w, "tenant-id not found", http.StatusUnauthorized)
 		return
 	}
@@ -103,6 +114,8 @@ func (s *Server) handleQuery(w http.ResponseWriter, r *http.Request) {
 	// Parse request
 	var req QueryRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		s.obs.RecordError(ctx, "invalid_request", "api_server")
+		s.obs.RecordRequest(ctx, "/query", time.Since(start), http.StatusBadRequest)
 		http.Error(w, fmt.Sprintf("invalid request: %v", err), http.StatusBadRequest)
 		return
 	}
@@ -111,6 +124,8 @@ func (s *Server) handleQuery(w http.ResponseWriter, r *http.Request) {
 	parser := oql.NewParser(req.Query)
 	query, err := parser.Parse()
 	if err != nil {
+		s.obs.RecordError(ctx, "parse_failure", "api_server")
+		s.obs.RecordRequest(ctx, "/query", time.Since(start), http.StatusBadRequest)
 		s.sendErrorResponse(w, fmt.Sprintf("failed to parse query: %v", err))
 		return
 	}
@@ -119,37 +134,53 @@ func (s *Server) handleQuery(w http.ResponseWriter, r *http.Request) {
 	trans := translator.NewTranslator(tenantID)
 	sqlQueries, err := trans.TranslateQuery(query)
 	if err != nil {
+		s.obs.RecordError(ctx, "translation_failure", "api_server")
+		s.obs.RecordRequest(ctx, "/query", time.Since(start), http.StatusBadRequest)
 		s.sendErrorResponse(w, fmt.Sprintf("failed to translate query: %v", err))
 		return
 	}
 
 	// Execute queries
 	results := make([]QueryResult, 0)
+	querySuccess := true
 	for _, sql := range sqlQueries {
 		// Check if this is an expand operation (marker format)
-		if result, err := s.executeExpandQuery(r.Context(), sql, tenantID); err == nil {
+		if result, err := s.executeExpandQuery(ctx, sql, tenantID); err == nil {
 			results = append(results, result)
 		} else if err.Error() == "not an expand query" {
 			// Check if this is a correlate operation (marker format)
-			if correlateResults, err := s.executeCorrelateQuery(r.Context(), sql, tenantID); err == nil {
+			if correlateResults, err := s.executeCorrelateQuery(ctx, sql, tenantID); err == nil {
 				results = append(results, correlateResults...)
 			} else if err.Error() == "not a correlate query" {
 				// Regular query
-				result, err := s.executeQuery(r.Context(), sql)
+				result, err := s.executeQuery(ctx, sql)
 				if err != nil {
+					querySuccess = false
+					s.obs.RecordError(ctx, "query_execution_failure", "api_server")
+					s.obs.RecordRequest(ctx, "/query", time.Since(start), http.StatusInternalServerError)
 					s.sendErrorResponse(w, fmt.Sprintf("failed to execute query: %v", err))
 					return
 				}
 				results = append(results, result)
 			} else {
+				querySuccess = false
+				s.obs.RecordError(ctx, "correlate_failure", "api_server")
+				s.obs.RecordRequest(ctx, "/query", time.Since(start), http.StatusInternalServerError)
 				s.sendErrorResponse(w, fmt.Sprintf("failed to execute correlate query: %v", err))
 				return
 			}
 		} else {
+			querySuccess = false
+			s.obs.RecordError(ctx, "expand_failure", "api_server")
+			s.obs.RecordRequest(ctx, "/query", time.Since(start), http.StatusInternalServerError)
 			s.sendErrorResponse(w, fmt.Sprintf("failed to execute expand query: %v", err))
 			return
 		}
 	}
+
+	// Record query metrics
+	s.obs.RecordQuery(ctx, "oql", time.Since(start), querySuccess)
+	s.obs.RecordRequest(ctx, "/query", time.Since(start), http.StatusOK)
 
 	// Send response
 	response := QueryResponse{

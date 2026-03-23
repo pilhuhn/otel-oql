@@ -17,3 +17,9 @@ query_api_port: 8080
 
 # Test mode (set to true to use tenant-id=0 as default)
 test_mode: true
+
+# Observability configuration (self-instrumentation)
+# Enable this to send traces and metrics about the OTEL-OQL service itself
+observability_enabled: false  # Set to true to enable self-observability
+observability_endpoint: "localhost:4317"  # OTLP gRPC endpoint for self-observability
+observability_tenant_id: "0"  # Tenant ID for self-observability data
