@@ -148,7 +148,22 @@ func (t *Translator) translateBinaryCondition(cond *oql.BinaryCondition) (string
 	// Format the value
 	valueStr := t.formatValue(value)
 
-	return fmt.Sprintf("%s %s %s", field, operator, valueStr), nil
+	// Convert OQL operators to SQL operators
+	sqlOperator := t.convertOperator(operator)
+
+	return fmt.Sprintf("%s %s %s", field, sqlOperator, valueStr), nil
+}
+
+// convertOperator converts OQL operators to SQL operators
+func (t *Translator) convertOperator(op string) string {
+	switch op {
+	case "==":
+		return "="
+	case "!=":
+		return "<>"
+	default:
+		return op
+	}
 }
 
 // getNativeColumn returns the native column name if the attribute has been extracted

@@ -2,22 +2,42 @@ package ingestion
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 
-	"github.com/pilhuhn/otel-oql/pkg/pinot"
+	"github.com/IBM/sarama"
 	"go.opentelemetry.io/collector/pdata/plog"
 	"go.opentelemetry.io/collector/pdata/pmetric"
 	"go.opentelemetry.io/collector/pdata/ptrace"
 )
 
-// Ingester handles data ingestion to Pinot
+// Ingester handles data ingestion to Kafka
 type Ingester struct {
-	client *pinot.Client
+	producer sarama.SyncProducer
 }
 
-// NewIngester creates a new ingester
-func NewIngester(client *pinot.Client) *Ingester {
+// NewIngester creates a new ingester with Kafka producer
+func NewIngester(kafkaBrokers string) (*Ingester, error) {
+	config := sarama.NewConfig()
+	config.Producer.Return.Successes = true
+	config.Producer.RequiredAcks = sarama.WaitForLocal
+	config.Producer.Compression = sarama.CompressionSnappy
+
+	brokers := []string{kafkaBrokers}
+	producer, err := sarama.NewSyncProducer(brokers, config)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create Kafka producer: %w", err)
+	}
+
 	return &Ingester{
-		client: client,
+		producer: producer,
+	}, nil
+}
+
+// Close closes the Kafka producer
+func (i *Ingester) Close() {
+	if i.producer != nil {
+		i.producer.Close()
 	}
 }
 
@@ -73,10 +93,37 @@ func (i *Ingester) IngestTraces(ctx context.Context, tenantID int, traces ptrace
 	}
 
 	if len(records) == 0 {
+		fmt.Println("DEBUG INGESTER: No spans to ingest")
 		return nil
 	}
 
-	return i.client.Insert(ctx, "otel_spans", records)
+	fmt.Printf("DEBUG INGESTER: Publishing %d span records to Kafka\n", len(records))
+
+	// Publish records to Kafka
+	for _, record := range records {
+		payload, err := json.Marshal(record)
+		if err != nil {
+			fmt.Printf("DEBUG INGESTER: Failed to marshal span: %v\n", err)
+			return fmt.Errorf("failed to marshal span record: %w", err)
+		}
+
+		fmt.Printf("DEBUG INGESTER: Marshaled span record, %d bytes\n", len(payload))
+
+		msg := &sarama.ProducerMessage{
+			Topic: "otel-spans",
+			Value: sarama.ByteEncoder(payload),
+		}
+
+		partition, offset, err := i.producer.SendMessage(msg)
+		if err != nil {
+			fmt.Printf("DEBUG INGESTER: Failed to send to Kafka: %v\n", err)
+			return fmt.Errorf("failed to send span to Kafka: %w", err)
+		}
+		fmt.Printf("DEBUG INGESTER: Sent to Kafka partition=%d offset=%d\n", partition, offset)
+	}
+
+	fmt.Printf("DEBUG INGESTER: Successfully published %d spans to Kafka\n", len(records))
+	return nil
 }
 
 // IngestMetrics ingests metrics into Pinot
@@ -107,10 +154,35 @@ func (i *Ingester) IngestMetrics(ctx context.Context, tenantID int, metrics pmet
 	}
 
 	if len(records) == 0 {
+		fmt.Println("DEBUG INGESTER: No metrics to ingest")
 		return nil
 	}
 
-	return i.client.Insert(ctx, "otel_metrics", records)
+	fmt.Printf("DEBUG INGESTER: Publishing %d metric records to Kafka\n", len(records))
+
+	// Publish records to Kafka
+	for _, record := range records {
+		payload, err := json.Marshal(record)
+		if err != nil {
+			fmt.Printf("DEBUG INGESTER: Failed to marshal metric: %v\n", err)
+			return fmt.Errorf("failed to marshal metric record: %w", err)
+		}
+
+		msg := &sarama.ProducerMessage{
+			Topic: "otel-metrics",
+			Value: sarama.ByteEncoder(payload),
+		}
+
+		partition, offset, err := i.producer.SendMessage(msg)
+		if err != nil {
+			fmt.Printf("DEBUG INGESTER: Failed to send metric to Kafka: %v\n", err)
+			return fmt.Errorf("failed to send metric to Kafka: %w", err)
+		}
+		fmt.Printf("DEBUG INGESTER: Sent metric to Kafka partition=%d offset=%d\n", partition, offset)
+	}
+
+	fmt.Printf("DEBUG INGESTER: Successfully published %d metrics to Kafka\n", len(records))
+	return nil
 }
 
 // IngestLogs ingests logs into Pinot
@@ -154,10 +226,35 @@ func (i *Ingester) IngestLogs(ctx context.Context, tenantID int, logs plog.Logs)
 	}
 
 	if len(records) == 0 {
+		fmt.Println("DEBUG INGESTER: No logs to ingest")
 		return nil
 	}
 
-	return i.client.Insert(ctx, "otel_logs", records)
+	fmt.Printf("DEBUG INGESTER: Publishing %d log records to Kafka\n", len(records))
+
+	// Publish records to Kafka
+	for _, record := range records {
+		payload, err := json.Marshal(record)
+		if err != nil {
+			fmt.Printf("DEBUG INGESTER: Failed to marshal log: %v\n", err)
+			return fmt.Errorf("failed to marshal log record: %w", err)
+		}
+
+		msg := &sarama.ProducerMessage{
+			Topic: "otel-logs",
+			Value: sarama.ByteEncoder(payload),
+		}
+
+		partition, offset, err := i.producer.SendMessage(msg)
+		if err != nil {
+			fmt.Printf("DEBUG INGESTER: Failed to send log to Kafka: %v\n", err)
+			return fmt.Errorf("failed to send log to Kafka: %w", err)
+		}
+		fmt.Printf("DEBUG INGESTER: Sent log to Kafka partition=%d offset=%d\n", partition, offset)
+	}
+
+	fmt.Printf("DEBUG INGESTER: Successfully published %d logs to Kafka\n", len(records))
+	return nil
 }
 
 // convertGauge converts gauge metrics to Pinot records
@@ -187,6 +284,18 @@ func (i *Ingester) convertGauge(tenantID int, metric pmetric.Metric, resourceAtt
 			"attributes":          removeKnownKeys(attrs, metricKnownKeys),
 			"resource_attributes": removeKnownKeys(resourceAttrs, metricResourceKnownKeys),
 		}
+
+		// Add exemplars if present (the "wormhole" for trace correlation)
+		if dp.Exemplars().Len() > 0 {
+			exemplar := dp.Exemplars().At(0)
+			if !exemplar.TraceID().IsEmpty() {
+				record["exemplar_trace_id"] = exemplar.TraceID().String()
+			}
+			if !exemplar.SpanID().IsEmpty() {
+				record["exemplar_span_id"] = exemplar.SpanID().String()
+			}
+		}
+
 		records = append(records, record)
 	}
 

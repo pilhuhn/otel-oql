@@ -1,0 +1,19 @@
+# OTEL-OQL Configuration File
+# This file can be used instead of command-line flags
+# Command-line flags will override these settings if provided
+
+# Pinot configuration
+pinot_url: "http://localhost:8000"
+
+# Kafka configuration
+kafka_brokers: "localhost:9092"
+
+# OTLP receiver ports
+otlp_grpc_port: 4317
+otlp_http_port: 4318
+
+# Query API port
+query_api_port: 8080
+
+# Test mode (set to true to use tenant-id=0 as default)
+test_mode: true

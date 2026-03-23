@@ -4,41 +4,135 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strconv"
+
+	"gopkg.in/yaml.v3"
 )
 
 // Config holds the application configuration
 type Config struct {
 	// Pinot configuration
-	PinotURL string
+	PinotURL string `yaml:"pinot_url"`
+
+	// Kafka configuration
+	KafkaBrokers string `yaml:"kafka_brokers"`
 
 	// OTLP receiver ports
-	OTLPGRPCPort int
-	OTLPHTTPPort int
+	OTLPGRPCPort int `yaml:"otlp_grpc_port"`
+	OTLPHTTPPort int `yaml:"otlp_http_port"`
 
 	// Multi-tenancy
-	TestMode bool // If true, uses tenant-id=0 as default
+	TestMode bool `yaml:"test_mode"` // If true, uses tenant-id=0 as default
 
 	// Query API
-	QueryAPIPort int
+	QueryAPIPort int `yaml:"query_api_port"`
 }
 
-// Load reads configuration from environment variables and command-line flags
+// Load reads configuration from config file, environment variables, and command-line flags
+// Priority (highest to lowest): CLI flags > Environment variables > Config file > Defaults
 func Load() (*Config, error) {
 	cfg := &Config{}
 
-	// Define flags
-	flag.StringVar(&cfg.PinotURL, "pinot-url", getEnv("PINOT_URL", "http://localhost:9000"), "Apache Pinot broker URL")
-	flag.IntVar(&cfg.OTLPGRPCPort, "otlp-grpc-port", getEnvInt("OTLP_GRPC_PORT", 4317), "OTLP gRPC receiver port")
-	flag.IntVar(&cfg.OTLPHTTPPort, "otlp-http-port", getEnvInt("OTLP_HTTP_PORT", 4318), "OTLP HTTP receiver port")
-	flag.BoolVar(&cfg.TestMode, "test-mode", getEnvBool("TEST_MODE", false), "Enable test mode (default tenant-id=0)")
-	flag.IntVar(&cfg.QueryAPIPort, "query-api-port", getEnvInt("QUERY_API_PORT", 8080), "Query API server port")
+	// Config file path flag (needs to be parsed first)
+	var configFile string
+	flag.StringVar(&configFile, "config", "", "Path to config file (default: ./otel-oql.yaml or ~/.otel-oql/config.yaml)")
+
+	// Define other flags with empty defaults (will be filled from config file or env)
+	var pinotURL string
+	var kafkaBrokers string
+	var otlpGRPCPort int
+	var otlpHTTPPort int
+	var queryAPIPort int
+	var testMode bool
+
+	flag.StringVar(&pinotURL, "pinot-url", "", "Apache Pinot broker URL")
+	flag.StringVar(&kafkaBrokers, "kafka-brokers", "", "Kafka broker addresses")
+	flag.IntVar(&otlpGRPCPort, "otlp-grpc-port", 0, "OTLP gRPC receiver port")
+	flag.IntVar(&otlpHTTPPort, "otlp-http-port", 0, "OTLP HTTP receiver port")
+	flag.BoolVar(&testMode, "test-mode", false, "Enable test mode (default tenant-id=0)")
+	flag.IntVar(&queryAPIPort, "query-api-port", 0, "Query API server port")
 
 	flag.Parse()
+
+	// 1. Load from config file (if exists)
+	if err := loadConfigFile(cfg, configFile); err != nil {
+		return nil, fmt.Errorf("failed to load config file: %w", err)
+	}
+
+	// 2. Override with environment variables
+	if env := os.Getenv("PINOT_URL"); env != "" {
+		cfg.PinotURL = env
+	}
+	if env := os.Getenv("KAFKA_BROKERS"); env != "" {
+		cfg.KafkaBrokers = env
+	}
+	if env := os.Getenv("OTLP_GRPC_PORT"); env != "" {
+		if val, err := strconv.Atoi(env); err == nil {
+			cfg.OTLPGRPCPort = val
+		}
+	}
+	if env := os.Getenv("OTLP_HTTP_PORT"); env != "" {
+		if val, err := strconv.Atoi(env); err == nil {
+			cfg.OTLPHTTPPort = val
+		}
+	}
+	if env := os.Getenv("QUERY_API_PORT"); env != "" {
+		if val, err := strconv.Atoi(env); err == nil {
+			cfg.QueryAPIPort = val
+		}
+	}
+	if env := os.Getenv("TEST_MODE"); env != "" {
+		if val, err := strconv.ParseBool(env); err == nil {
+			cfg.TestMode = val
+		}
+	}
+
+	// 3. Override with CLI flags (if provided)
+	if pinotURL != "" {
+		cfg.PinotURL = pinotURL
+	}
+	if kafkaBrokers != "" {
+		cfg.KafkaBrokers = kafkaBrokers
+	}
+	if otlpGRPCPort != 0 {
+		cfg.OTLPGRPCPort = otlpGRPCPort
+	}
+	if otlpHTTPPort != 0 {
+		cfg.OTLPHTTPPort = otlpHTTPPort
+	}
+	if queryAPIPort != 0 {
+		cfg.QueryAPIPort = queryAPIPort
+	}
+	// testMode from flags is handled specially since false is the default
+	if flag.Lookup("test-mode").Value.String() == "true" {
+		cfg.TestMode = true
+	}
+
+	// Apply defaults if still not set
+	if cfg.PinotURL == "" {
+		cfg.PinotURL = "http://localhost:9000"
+	}
+	if cfg.KafkaBrokers == "" {
+		cfg.KafkaBrokers = "localhost:9092"
+	}
+	if cfg.OTLPGRPCPort == 0 {
+		cfg.OTLPGRPCPort = 4317
+	}
+	if cfg.OTLPHTTPPort == 0 {
+		cfg.OTLPHTTPPort = 4318
+	}
+	if cfg.QueryAPIPort == 0 {
+		cfg.QueryAPIPort = 8080
+	}
 
 	// Validate configuration
 	if cfg.PinotURL == "" {
 		return nil, fmt.Errorf("pinot-url is required")
+	}
+
+	if cfg.KafkaBrokers == "" {
+		return nil, fmt.Errorf("kafka-brokers is required")
 	}
 
 	if cfg.OTLPGRPCPort <= 0 || cfg.OTLPGRPCPort > 65535 {
@@ -56,30 +150,45 @@ func Load() (*Config, error) {
 	return cfg, nil
 }
 
-// getEnv retrieves an environment variable or returns a default value
-func getEnv(key, defaultValue string) string {
-	if value := os.Getenv(key); value != "" {
-		return value
-	}
-	return defaultValue
-}
+// loadConfigFile loads configuration from a YAML file
+func loadConfigFile(cfg *Config, configPath string) error {
+	// Determine config file path
+	if configPath == "" {
+		// Try default locations
+		locations := []string{
+			"./otel-oql.yaml",
+			filepath.Join(os.Getenv("HOME"), ".otel-oql", "config.yaml"),
+			"/etc/otel-oql/config.yaml",
+		}
 
-// getEnvInt retrieves an integer environment variable or returns a default value
-func getEnvInt(key string, defaultValue int) int {
-	if value := os.Getenv(key); value != "" {
-		if intValue, err := strconv.Atoi(value); err == nil {
-			return intValue
+		for _, loc := range locations {
+			if _, err := os.Stat(loc); err == nil {
+				configPath = loc
+				break
+			}
 		}
 	}
-	return defaultValue
+
+	// If no config file found, return (not an error)
+	if configPath == "" {
+		return nil
+	}
+
+	// Read config file
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		// If explicitly specified, it's an error. If default location, it's ok.
+		if flag.Lookup("config").Value.String() != "" {
+			return fmt.Errorf("failed to read config file %s: %w", configPath, err)
+		}
+		return nil
+	}
+
+	// Parse YAML
+	if err := yaml.Unmarshal(data, cfg); err != nil {
+		return fmt.Errorf("failed to parse config file %s: %w", configPath, err)
+	}
+
+	return nil
 }
 
-// getEnvBool retrieves a boolean environment variable or returns a default value
-func getEnvBool(key string, defaultValue bool) bool {
-	if value := os.Getenv(key); value != "" {
-		if boolValue, err := strconv.ParseBool(value); err == nil {
-			return boolValue
-		}
-	}
-	return defaultValue
-}

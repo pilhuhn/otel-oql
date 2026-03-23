@@ -64,6 +64,8 @@ func (r *HTTPReceiver) Stop(ctx context.Context) error {
 
 // handleTraces handles trace export requests
 func (r *HTTPReceiver) handleTraces(w http.ResponseWriter, req *http.Request) {
+	fmt.Printf("DEBUG HTTP: Received traces request from %s\n", req.RemoteAddr)
+
 	if req.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -72,30 +74,38 @@ func (r *HTTPReceiver) handleTraces(w http.ResponseWriter, req *http.Request) {
 	// Read request body
 	body, err := io.ReadAll(req.Body)
 	if err != nil {
+		fmt.Printf("DEBUG HTTP: Failed to read body: %v\n", err)
 		http.Error(w, fmt.Sprintf("failed to read request body: %v", err), http.StatusBadRequest)
 		return
 	}
 	defer req.Body.Close()
+	fmt.Printf("DEBUG HTTP: Read %d bytes from request body\n", len(body))
 
 	// Unmarshal OTLP request
 	otlpReq := ptraceotlp.NewExportRequest()
 	if err := otlpReq.UnmarshalProto(body); err != nil {
+		fmt.Printf("DEBUG HTTP: Failed to unmarshal: %v\n", err)
 		http.Error(w, fmt.Sprintf("failed to unmarshal request: %v", err), http.StatusBadRequest)
 		return
 	}
+	fmt.Printf("DEBUG HTTP: Successfully unmarshaled traces\n")
 
 	// Get tenant ID from context
 	tenantID, ok := tenant.FromContext(req.Context())
 	if !ok {
+		fmt.Printf("DEBUG HTTP: Tenant ID not found in context\n")
 		http.Error(w, "tenant-id not found", http.StatusUnauthorized)
 		return
 	}
+	fmt.Printf("DEBUG HTTP: Tenant ID: %d\n", tenantID)
 
 	// Ingest traces
 	if err := r.ingester.IngestTraces(req.Context(), tenantID, otlpReq.Traces()); err != nil {
+		fmt.Printf("DEBUG HTTP: Failed to ingest traces: %v\n", err)
 		http.Error(w, fmt.Sprintf("failed to ingest traces: %v", err), http.StatusInternalServerError)
 		return
 	}
+	fmt.Printf("DEBUG HTTP: Successfully ingested traces\n")
 
 	// Return success
 	w.WriteHeader(http.StatusOK)
@@ -103,6 +113,8 @@ func (r *HTTPReceiver) handleTraces(w http.ResponseWriter, req *http.Request) {
 
 // handleMetrics handles metric export requests
 func (r *HTTPReceiver) handleMetrics(w http.ResponseWriter, req *http.Request) {
+	fmt.Printf("DEBUG HTTP: Received metrics request from %s\n", req.RemoteAddr)
+
 	if req.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -111,30 +123,38 @@ func (r *HTTPReceiver) handleMetrics(w http.ResponseWriter, req *http.Request) {
 	// Read request body
 	body, err := io.ReadAll(req.Body)
 	if err != nil {
+		fmt.Printf("DEBUG HTTP: Failed to read body: %v\n", err)
 		http.Error(w, fmt.Sprintf("failed to read request body: %v", err), http.StatusBadRequest)
 		return
 	}
 	defer req.Body.Close()
+	fmt.Printf("DEBUG HTTP: Read %d bytes from request body\n", len(body))
 
 	// Unmarshal OTLP request
 	otlpReq := pmetricotlp.NewExportRequest()
 	if err := otlpReq.UnmarshalProto(body); err != nil {
+		fmt.Printf("DEBUG HTTP: Failed to unmarshal: %v\n", err)
 		http.Error(w, fmt.Sprintf("failed to unmarshal request: %v", err), http.StatusBadRequest)
 		return
 	}
+	fmt.Printf("DEBUG HTTP: Successfully unmarshaled metrics\n")
 
 	// Get tenant ID from context
 	tenantID, ok := tenant.FromContext(req.Context())
 	if !ok {
+		fmt.Printf("DEBUG HTTP: Tenant ID not found in context\n")
 		http.Error(w, "tenant-id not found", http.StatusUnauthorized)
 		return
 	}
+	fmt.Printf("DEBUG HTTP: Tenant ID: %d\n", tenantID)
 
 	// Ingest metrics
 	if err := r.ingester.IngestMetrics(req.Context(), tenantID, otlpReq.Metrics()); err != nil {
+		fmt.Printf("DEBUG HTTP: Failed to ingest metrics: %v\n", err)
 		http.Error(w, fmt.Sprintf("failed to ingest metrics: %v", err), http.StatusInternalServerError)
 		return
 	}
+	fmt.Printf("DEBUG HTTP: Successfully ingested metrics\n")
 
 	// Return success
 	w.WriteHeader(http.StatusOK)
@@ -142,6 +162,8 @@ func (r *HTTPReceiver) handleMetrics(w http.ResponseWriter, req *http.Request) {
 
 // handleLogs handles log export requests
 func (r *HTTPReceiver) handleLogs(w http.ResponseWriter, req *http.Request) {
+	fmt.Printf("DEBUG HTTP: Received logs request from %s\n", req.RemoteAddr)
+
 	if req.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -150,30 +172,38 @@ func (r *HTTPReceiver) handleLogs(w http.ResponseWriter, req *http.Request) {
 	// Read request body
 	body, err := io.ReadAll(req.Body)
 	if err != nil {
+		fmt.Printf("DEBUG HTTP: Failed to read body: %v\n", err)
 		http.Error(w, fmt.Sprintf("failed to read request body: %v", err), http.StatusBadRequest)
 		return
 	}
 	defer req.Body.Close()
+	fmt.Printf("DEBUG HTTP: Read %d bytes from request body\n", len(body))
 
 	// Unmarshal OTLP request
 	otlpReq := plogotlp.NewExportRequest()
 	if err := otlpReq.UnmarshalProto(body); err != nil {
+		fmt.Printf("DEBUG HTTP: Failed to unmarshal: %v\n", err)
 		http.Error(w, fmt.Sprintf("failed to unmarshal request: %v", err), http.StatusBadRequest)
 		return
 	}
+	fmt.Printf("DEBUG HTTP: Successfully unmarshaled logs\n")
 
 	// Get tenant ID from context
 	tenantID, ok := tenant.FromContext(req.Context())
 	if !ok {
+		fmt.Printf("DEBUG HTTP: Tenant ID not found in context\n")
 		http.Error(w, "tenant-id not found", http.StatusUnauthorized)
 		return
 	}
+	fmt.Printf("DEBUG HTTP: Tenant ID: %d\n", tenantID)
 
 	// Ingest logs
 	if err := r.ingester.IngestLogs(req.Context(), tenantID, otlpReq.Logs()); err != nil {
+		fmt.Printf("DEBUG HTTP: Failed to ingest logs: %v\n", err)
 		http.Error(w, fmt.Sprintf("failed to ingest logs: %v", err), http.StatusInternalServerError)
 		return
 	}
+	fmt.Printf("DEBUG HTTP: Successfully ingested logs\n")
 
 	// Return success
 	w.WriteHeader(http.StatusOK)

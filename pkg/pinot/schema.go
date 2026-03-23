@@ -31,17 +31,18 @@ type DateTimeFieldSpec struct {
 
 // TableConfig represents a Pinot table configuration
 type TableConfig struct {
-	TableName  string                 `json:"tableName"`
-	TableType  string                 `json:"tableType"`
-	Segmentation *SegmentationConfig  `json:"segmentsConfig,omitempty"`
-	Tenants    *TenantsConfig         `json:"tenants"`
-	TableIndexConfig *TableIndexConfig `json:"tableIndexConfig"`
-	Metadata   *MetadataConfig        `json:"metadata,omitempty"`
-	Routing    *RoutingConfig         `json:"routing,omitempty"`
+	TableName        string                 `json:"tableName"`
+	TableType        string                 `json:"tableType"`
+	Segmentation     *SegmentationConfig    `json:"segmentsConfig,omitempty"`
+	Tenants          *TenantsConfig         `json:"tenants"`
+	TableIndexConfig *TableIndexConfig      `json:"tableIndexConfig"`
+	Metadata         *MetadataConfig        `json:"metadata,omitempty"`
+	Routing          *RoutingConfig         `json:"routing,omitempty"`
 }
 
 // SegmentationConfig represents segmentation configuration
 type SegmentationConfig struct {
+	TimeColumnName          string                        `json:"timeColumnName,omitempty"` // Required for REALTIME tables
 	TimeType                string                        `json:"timeType,omitempty"`
 	Replication             string                        `json:"replication,omitempty"`
 	SegmentPushType         string                        `json:"segmentPushType,omitempty"`
@@ -67,11 +68,12 @@ type TenantsConfig struct {
 
 // TableIndexConfig represents table index configuration
 type TableIndexConfig struct {
-	LoadMode             string   `json:"loadMode"`
-	InvertedIndexColumns []string `json:"invertedIndexColumns,omitempty"`
-	NoDictionaryColumns  []string `json:"noDictionaryColumns,omitempty"`
-	RangeIndexColumns    []string `json:"rangeIndexColumns,omitempty"`
-	JsonIndexColumns     []string `json:"jsonIndexColumns,omitempty"`
+	LoadMode             string            `json:"loadMode"`
+	InvertedIndexColumns []string          `json:"invertedIndexColumns,omitempty"`
+	NoDictionaryColumns  []string          `json:"noDictionaryColumns,omitempty"`
+	RangeIndexColumns    []string          `json:"rangeIndexColumns,omitempty"`
+	JsonIndexColumns     []string          `json:"jsonIndexColumns,omitempty"`
+	StreamConfigs        map[string]string `json:"streamConfigs,omitempty"` // For REALTIME tables
 }
 
 // MetadataConfig represents metadata configuration
@@ -174,9 +176,9 @@ func getSpansTableConfig() *TableConfig {
 		TableName: "otel_spans",
 		TableType: "REALTIME",
 		Segmentation: &SegmentationConfig{
-			TimeType:        "MILLISECONDS",
-			Replication:     "1",
-			SegmentPushType: "APPEND",
+			TimeColumnName: "timestamp",
+			TimeType:       "MILLISECONDS",
+			Replication:    "1",
 			SegmentPartitionConfig: &SegmentPartitionConfig{
 				ColumnPartitionMap: map[string]*ColumnPartition{
 					"tenant_id": {
@@ -190,11 +192,25 @@ func getSpansTableConfig() *TableConfig {
 			Broker: "DefaultTenant",
 			Server: "DefaultTenant",
 		},
+		Metadata: &MetadataConfig{
+			CustomConfigs: map[string]string{},
+		},
 		TableIndexConfig: &TableIndexConfig{
 			LoadMode:             "MMAP",
 			InvertedIndexColumns: []string{"tenant_id", "trace_id", "span_id", "name", "service_name", "http_status_code"},
 			JsonIndexColumns:     []string{"attributes", "resource_attributes"},
 			RangeIndexColumns:    []string{"timestamp", "duration"},
+			StreamConfigs: map[string]string{
+				"streamType":                                    "kafka",
+				"stream.kafka.topic.name":                       "otel-spans",
+				"stream.kafka.broker.list":                      "kafka:29092",
+				"stream.kafka.consumer.type":                    "lowlevel",
+				"stream.kafka.consumer.factory.class.name":      "org.apache.pinot.plugin.stream.kafka20.KafkaConsumerFactory",
+				"stream.kafka.decoder.class.name":               "org.apache.pinot.plugin.inputformat.json.JSONMessageDecoder",
+				"stream.kafka.consumer.prop.auto.offset.reset":  "smallest",
+				"realtime.segment.flush.threshold.rows":         "10000",
+				"realtime.segment.flush.threshold.time":         "1m",
+			},
 		},
 	}
 }
@@ -246,9 +262,9 @@ func getMetricsTableConfig() *TableConfig {
 		TableName: "otel_metrics",
 		TableType: "REALTIME",
 		Segmentation: &SegmentationConfig{
-			TimeType:        "MILLISECONDS",
-			Replication:     "1",
-			SegmentPushType: "APPEND",
+			TimeColumnName: "timestamp",
+			TimeType:       "MILLISECONDS",
+			Replication:    "1",
 			SegmentPartitionConfig: &SegmentPartitionConfig{
 				ColumnPartitionMap: map[string]*ColumnPartition{
 					"tenant_id": {
@@ -262,11 +278,25 @@ func getMetricsTableConfig() *TableConfig {
 			Broker: "DefaultTenant",
 			Server: "DefaultTenant",
 		},
+		Metadata: &MetadataConfig{
+			CustomConfigs: map[string]string{},
+		},
 		TableIndexConfig: &TableIndexConfig{
 			LoadMode:             "MMAP",
 			InvertedIndexColumns: []string{"tenant_id", "metric_name", "service_name", "exemplar_trace_id"},
 			JsonIndexColumns:     []string{"attributes", "resource_attributes"},
 			RangeIndexColumns:    []string{"timestamp", "value"},
+			StreamConfigs: map[string]string{
+				"streamType":                                    "kafka",
+				"stream.kafka.topic.name":                       "otel-metrics",
+				"stream.kafka.broker.list":                      "kafka:29092",
+				"stream.kafka.consumer.type":                    "lowlevel",
+				"stream.kafka.consumer.factory.class.name":      "org.apache.pinot.plugin.stream.kafka20.KafkaConsumerFactory",
+				"stream.kafka.decoder.class.name":               "org.apache.pinot.plugin.inputformat.json.JSONMessageDecoder",
+				"stream.kafka.consumer.prop.auto.offset.reset":  "smallest",
+				"realtime.segment.flush.threshold.rows":         "10000",
+				"realtime.segment.flush.threshold.time":         "1m",
+			},
 		},
 	}
 }
@@ -313,9 +343,9 @@ func getLogsTableConfig() *TableConfig {
 		TableName: "otel_logs",
 		TableType: "REALTIME",
 		Segmentation: &SegmentationConfig{
-			TimeType:        "MILLISECONDS",
-			Replication:     "1",
-			SegmentPushType: "APPEND",
+			TimeColumnName: "timestamp",
+			TimeType:       "MILLISECONDS",
+			Replication:    "1",
 			SegmentPartitionConfig: &SegmentPartitionConfig{
 				ColumnPartitionMap: map[string]*ColumnPartition{
 					"tenant_id": {
@@ -329,11 +359,25 @@ func getLogsTableConfig() *TableConfig {
 			Broker: "DefaultTenant",
 			Server: "DefaultTenant",
 		},
+		Metadata: &MetadataConfig{
+			CustomConfigs: map[string]string{},
+		},
 		TableIndexConfig: &TableIndexConfig{
 			LoadMode:             "MMAP",
 			InvertedIndexColumns: []string{"tenant_id", "trace_id", "severity_text", "service_name"},
 			JsonIndexColumns:     []string{"attributes", "resource_attributes"},
 			RangeIndexColumns:    []string{"timestamp", "severity_number"},
+			StreamConfigs: map[string]string{
+				"streamType":                                    "kafka",
+				"stream.kafka.topic.name":                       "otel-logs",
+				"stream.kafka.broker.list":                      "kafka:29092",
+				"stream.kafka.consumer.type":                    "lowlevel",
+				"stream.kafka.consumer.factory.class.name":      "org.apache.pinot.plugin.stream.kafka20.KafkaConsumerFactory",
+				"stream.kafka.decoder.class.name":               "org.apache.pinot.plugin.inputformat.json.JSONMessageDecoder",
+				"stream.kafka.consumer.prop.auto.offset.reset":  "smallest",
+				"realtime.segment.flush.threshold.rows":         "10000",
+				"realtime.segment.flush.threshold.time":         "1m",
+			},
 		},
 	}
 }

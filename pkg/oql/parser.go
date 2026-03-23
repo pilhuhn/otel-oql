@@ -164,6 +164,14 @@ func (p *Parser) parseSingleCondition(s string) (Condition, error) {
 			left := strings.TrimSpace(s[:idx])
 			right := strings.TrimSpace(s[idx+len(op):])
 
+			// Check for empty parts
+			if left == "" {
+				return nil, fmt.Errorf("invalid condition: missing left operand in %s", s)
+			}
+			if right == "" {
+				return nil, fmt.Errorf("invalid condition: missing right operand in %s", s)
+			}
+
 			// Parse the right side value
 			value := p.parseValue(right)
 
@@ -373,7 +381,7 @@ func (p *Parser) peek() byte {
 
 func (p *Parser) peekWord() string {
 	start := p.pos
-	for p.pos < len(p.input) && !isWhitespace(p.input[p.pos]) && p.input[p.pos] != '|' {
+	for p.pos < len(p.input) && !isWhitespace(p.input[p.pos]) && p.input[p.pos] != '|' && p.input[p.pos] != '(' {
 		p.pos++
 	}
 	word := p.input[start:p.pos]
@@ -383,7 +391,7 @@ func (p *Parser) peekWord() string {
 
 func (p *Parser) readWord() string {
 	start := p.pos
-	for p.pos < len(p.input) && !isWhitespace(p.input[p.pos]) && p.input[p.pos] != '|' {
+	for p.pos < len(p.input) && !isWhitespace(p.input[p.pos]) && p.input[p.pos] != '|' && p.input[p.pos] != '(' {
 		p.pos++
 	}
 	return p.input[start:p.pos]

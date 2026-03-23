@@ -21,6 +21,34 @@ else
     ERRORS=$((ERRORS + 1))
 fi
 
+# Check Pulsar container
+echo -n "📦 Pulsar container exists: "
+if podman ps -a --format '{{.Names}}' | grep -q '^pulsar-standalone$'; then
+    echo -e "${GREEN}✓${NC}"
+
+    echo -n "▶️  Pulsar container running: "
+    if podman ps --format '{{.Names}}' | grep -q '^pulsar-standalone$'; then
+        echo -e "${GREEN}✓${NC}"
+    else
+        echo -e "${RED}✗${NC} Container exists but is stopped"
+        echo "   Run: podman start pulsar-standalone"
+        ERRORS=$((ERRORS + 1))
+    fi
+else
+    echo -e "${RED}✗${NC} Pulsar container not found"
+    echo "   Run: ./scripts/start-pulsar.sh"
+    ERRORS=$((ERRORS + 1))
+fi
+
+# Check Pulsar health
+echo -n "🏥 Pulsar health: "
+if curl -s http://localhost:8081/admin/v2/brokers/health 2>/dev/null | grep -q "ok"; then
+    echo -e "${GREEN}✓${NC}"
+else
+    echo -e "${RED}✗${NC} Pulsar not responding on http://localhost:8081"
+    ERRORS=$((ERRORS + 1))
+fi
+
 # Check Pinot container
 echo -n "📦 Pinot container exists: "
 if podman ps -a --format '{{.Names}}' | grep -q '^pinot-quickstart$'; then
@@ -112,7 +140,7 @@ check_port 8080 "Query API" && SERVICE_RUNNING=$((SERVICE_RUNNING + 1))
 if [ $SERVICE_RUNNING -eq 0 ]; then
     echo ""
     echo "   ${YELLOW}Service not running${NC}"
-    echo "   Run: ./otel-oql --test-mode --pinot-url=http://localhost:9000"
+    echo "   Run: ./otel-oql --test-mode --pinot-url=http://localhost:9000 --pulsar-url=pulsar://localhost:6650"
 fi
 
 # Summary
@@ -126,8 +154,9 @@ if [ $ERRORS -eq 0 ] && [ $TABLES_OK -eq 3 ]; then
     echo ""
     echo "Next steps:"
     echo "  • Open Pinot UI: http://localhost:9000"
+    echo "  • Open Pulsar UI: http://localhost:8081"
     if [ $SERVICE_RUNNING -eq 0 ]; then
-        echo "  • Start service: ./otel-oql --test-mode --pinot-url=http://localhost:9000"
+        echo "  • Start service: ./otel-oql --test-mode --pinot-url=http://localhost:9000 --pulsar-url=pulsar://localhost:6650"
     fi
     echo "  • Send test data or run OQL queries"
 elif [ $ERRORS -eq 0 ] && [ $TABLES_OK -eq 0 ]; then
