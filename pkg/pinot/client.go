@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
+	"strings"
 	"time"
 )
 
@@ -37,7 +39,7 @@ func (c *Client) Query(ctx context.Context, sql string) (*QueryResponse, error) 
 		return nil, fmt.Errorf("failed to marshal query: %w", err)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, "POST", c.brokerURL+"/query/sql", bytes.NewBuffer(jsonData))
+	req, err := http.NewRequestWithContext(ctx, "POST", c.brokerURL+"/sql", bytes.NewBuffer(jsonData))
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
@@ -46,7 +48,16 @@ func (c *Client) Query(ctx context.Context, sql string) (*QueryResponse, error) 
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("failed to execute query: %w", err)
+		// Check if it's a connection error
+		if isConnectionError(err) {
+			return nil, fmt.Errorf("Pinot is not reachable at %s (connection refused). Ensure Pinot is running.", c.brokerURL)
+		}
+		// Check if it's a timeout
+		if isTimeoutError(err) {
+			return nil, fmt.Errorf("Pinot query timeout at %s. The query took too long or Pinot is unresponsive.", c.brokerURL)
+		}
+		// Other network errors
+		return nil, fmt.Errorf("failed to connect to Pinot at %s: %w", c.brokerURL, err)
 	}
 	defer resp.Body.Close()
 
@@ -164,4 +175,29 @@ type QueryResponse struct {
 	NumDocsScanned int64 `json:"numDocsScanned"`
 	TotalDocs      int64 `json:"totalDocs"`
 	TimeUsedMs     int64 `json:"timeUsedMs"`
+}
+
+// isConnectionError checks if the error is a connection refused error
+func isConnectionError(err error) bool {
+	if err == nil {
+		return false
+	}
+	errStr := err.Error()
+	return strings.Contains(errStr, "connection refused") ||
+		strings.Contains(errStr, "connect: connection refused") ||
+		strings.Contains(errStr, "no such host") ||
+		strings.Contains(errStr, "network is unreachable")
+}
+
+// isTimeoutError checks if the error is a timeout error
+func isTimeoutError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if urlErr, ok := err.(*url.Error); ok {
+		return urlErr.Timeout()
+	}
+	errStr := err.Error()
+	return strings.Contains(errStr, "timeout") ||
+		strings.Contains(errStr, "deadline exceeded")
 }

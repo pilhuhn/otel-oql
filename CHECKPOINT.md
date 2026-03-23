@@ -1,23 +1,27 @@
 # OTEL-OQL Implementation Checkpoint
 
 **Date**: March 23, 2026
-**Status**: ✅ Production-Ready with Streaming, Testing & Observability
-**Last Updated**: March 23, 2026 (100% Test Pass Rate + Self-Observability Implemented)
+**Status**: ✅ Fully Operational - End-to-End Working
+**Last Updated**: March 23, 2026 (Production Setup Complete)
 
 ## Summary
 
-Successfully implemented a complete multi-tenant OpenTelemetry data ingestion and query service with OQL (Observability Query Language) support, backed by Apache Pinot with Kafka streaming. The service includes comprehensive integration tests (100% pass rate), YAML config file support, and debug logging throughout the pipeline.
+Successfully implemented a complete multi-tenant OpenTelemetry data ingestion and query service with OQL (Observability Query Language) support, backed by Apache Pinot with Kafka streaming. The service is now fully operational end-to-end with data flowing from OTLP ingestion → Kafka → Pinot → OQL queries.
 
-**Latest Major Updates**:
-- ✅ **CLI Query Tool** - Interactive command-line client for OQL queries (NEW)
+**Latest Major Updates** (March 23, 2026):
+- ✅ **End-to-End Working** - Complete data flow verified: OTLP → Kafka → Pinot → OQL queries
+- ✅ **Simplified Setup** - `compose-simple.yaml` with minimal dependencies (Kafka + Pinot only)
+- ✅ **Setup Script** - `scripts/setup-simple.sh` automates full environment setup
+- ✅ **Fixed Pinot Integration** - Corrected query endpoint from `/query/sql` to `/sql`
+- ✅ **Fixed CLI Headers** - Corrected header from `X-Tenant-ID` to `tenant-id`
+- ✅ **User-Friendly Errors** - Enhanced error messages for unreachable services
+- ✅ **Kafka Topic Ordering** - Proper setup sequence: topics first, then Pinot tables
+- ✅ **CLI Query Tool** - Interactive command-line client for OQL queries
 - ✅ **Self-Observability** - Full OpenTelemetry instrumentation with traces and metrics
-- ✅ **Complete OQL Implementation** - All operations fully functional with aggregations & time functions
-- ✅ **Aggregation Support** - avg, min, max, sum, count with group by
-- ✅ **Time Functions** - since (relative) and between (absolute) time ranges
-- ✅ **Pipe-Optional OQL Syntax** - Pipes (`|`) now completely optional for cleaner queries
+- ✅ **Complete OQL Implementation** - All operations fully functional
 - ✅ **100% Test Pass Rate** - All 23 integration tests passing
-- ✅ Multi-tenant isolation fixed across all signals
-- ✅ Kafka streaming integration with REALTIME Pinot tables
+- ✅ Multi-tenant isolation across all signals
+- ✅ Kafka streaming with REALTIME Pinot tables
 
 ## Completed Components
 

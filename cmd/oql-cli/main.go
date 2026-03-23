@@ -115,13 +115,13 @@ func main() {
 	// Execute query
 	resp, err := executeQuery(*endpoint, *tenantID, query)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error executing query: %v\n", err)
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
 
 	// Handle error response
 	if resp.Error != "" {
-		fmt.Fprintf(os.Stderr, "Query error: %s\n", resp.Error)
+		fmt.Fprintf(os.Stderr, "Error: %s\n", resp.Error)
 		os.Exit(1)
 	}
 
@@ -157,7 +157,7 @@ func executeQuery(endpoint, tenantID, query string) (*QueryResponse, error) {
 	}
 
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("X-Tenant-ID", tenantID)
+	req.Header.Set("tenant-id", tenantID)
 
 	// Execute request
 	client := &http.Client{}
@@ -174,6 +174,12 @@ func executeQuery(endpoint, tenantID, query string) (*QueryResponse, error) {
 	}
 
 	if resp.StatusCode != http.StatusOK {
+		// Try to parse error from JSON response
+		var errorResp QueryResponse
+		if err := json.Unmarshal(body, &errorResp); err == nil && errorResp.Error != "" {
+			return nil, fmt.Errorf("%s", errorResp.Error)
+		}
+		// Fallback to raw body
 		return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(body))
 	}
 

@@ -3,9 +3,9 @@
 # Command-line flags will override these settings if provided
 
 # Pinot configuration
-pinot_url: "http://localhost:8000"
+pinot_url: "http://localhost:9000"
 
-# Kafka configuration
+# Kafka configuration (external Kafka via compose)
 kafka_brokers: "localhost:9092"
 
 # OTLP receiver ports
