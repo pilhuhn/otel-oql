@@ -9,6 +9,7 @@
 Successfully implemented a complete multi-tenant OpenTelemetry data ingestion and query service with OQL (Observability Query Language) support, backed by Apache Pinot with Kafka streaming. The service includes comprehensive integration tests (100% pass rate), YAML config file support, and debug logging throughout the pipeline.
 
 **Latest Major Updates**:
+- ✅ **Pipe-Optional OQL Syntax** - Pipes (`|`) now completely optional for cleaner queries
 - ✅ **100% Test Pass Rate** - All 8 integration tests passing
 - ✅ Multi-tenant isolation fixed across all signals
 - ✅ OQL expand operation rewritten for Pinot compatibility
@@ -44,6 +45,7 @@ Successfully implemented a complete multi-tenant OpenTelemetry data ingestion an
 
 ### ✅ Query Engine
 - **OQL Parser**: Complete syntax support with unit tests
+- **Flexible Syntax**: Pipes (`|`) are completely optional - queries work with or without them
 - **SQL Translator**: OQL to Pinot SQL with tenant isolation and operator conversion
 - **Query API**: HTTP endpoint (port 8080) with JSON interface
 - **Operator Fix**: Properly converts `==` to `=` for SQL
@@ -138,6 +140,8 @@ otel-oql/
 ## Git History
 
 ```
+9e946bc - Make pipe operators completely optional in OQL syntax
+01ec8dd - Update checkpoint to reflect 100% test pass rate
 bd4993d - Fix multi-tenant isolation and OQL expand operation - achieve 100% test pass rate
 5c35eca - Update checkpoint with Kafka streaming, testing, and config file progress
 e41fc18 - Implement Kafka streaming, integration tests, and config file support
@@ -148,7 +152,6 @@ f76a22c - Fix schema implementation with hybrid attribute storage
 15aecf9 - Document schema implementation gap and solution
 572bb27 - Add implementation checkpoint
 b89f4a3 - Add OQL query examples and documentation
-3dd80d3 - Implement OQL query engine and API server
 ```
 
 ## Testing Status
@@ -243,7 +246,13 @@ curl http://localhost:8080/health
 # Send test data
 go run cmd/send-test-data/main.go
 
-# Query via OQL
+# Query via OQL (pipes optional)
+curl -X POST http://localhost:8080/query \
+  -H 'X-Tenant-ID: 0' \
+  -H 'Content-Type: application/json' \
+  -d '{"query": "signal=spans limit 10"}'
+
+# Or with pipes (both work identically)
 curl -X POST http://localhost:8080/query \
   -H 'X-Tenant-ID: 0' \
   -H 'Content-Type: application/json' \
