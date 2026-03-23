@@ -2,18 +2,19 @@
 
 **Date**: March 23, 2026
 **Status**: ✅ Production-Ready with Streaming & Testing
-**Last Updated**: March 23, 2026 (Kafka integration + Tests + Config file)
+**Last Updated**: March 23, 2026 (100% Test Pass Rate - All Critical Bugs Fixed)
 
 ## Summary
 
-Successfully implemented a complete multi-tenant OpenTelemetry data ingestion and query service with OQL (Observability Query Language) support, backed by Apache Pinot with Kafka streaming. The service includes comprehensive integration tests (75% pass rate), YAML config file support, and debug logging throughout the pipeline.
+Successfully implemented a complete multi-tenant OpenTelemetry data ingestion and query service with OQL (Observability Query Language) support, backed by Apache Pinot with Kafka streaming. The service includes comprehensive integration tests (100% pass rate), YAML config file support, and debug logging throughout the pipeline.
 
 **Latest Major Updates**:
+- ✅ **100% Test Pass Rate** - All 8 integration tests passing
+- ✅ Multi-tenant isolation fixed across all signals
+- ✅ OQL expand operation rewritten for Pinot compatibility
 - ✅ Kafka streaming integration with REALTIME Pinot tables
-- ✅ Integration test suite with 6/8 tests passing
 - ✅ YAML config file support with priority system
 - ✅ Docker Compose orchestration for full stack
-- ✅ Comprehensive debug logging
 
 ## Completed Components
 
@@ -137,6 +138,8 @@ otel-oql/
 ## Git History
 
 ```
+bd4993d - Fix multi-tenant isolation and OQL expand operation - achieve 100% test pass rate
+5c35eca - Update checkpoint with Kafka streaming, testing, and config file progress
 e41fc18 - Implement Kafka streaming, integration tests, and config file support
 4595e1f - Add quickstart guide for rapid setup
 4e223d3 - Add comprehensive Pinot setup guide and automation scripts
@@ -146,26 +149,26 @@ f76a22c - Fix schema implementation with hybrid attribute storage
 572bb27 - Add implementation checkpoint
 b89f4a3 - Add OQL query examples and documentation
 3dd80d3 - Implement OQL query engine and API server
-1313f0a - Add main application and schema setup command
-3c8868f - Implement OTLP ingestion pipeline
 ```
 
 ## Testing Status
 
-### ✅ Integration Tests (6/8 Passing - 75%)
+### ✅ Integration Tests (8/8 Passing - 100%)
 
-**Passing Tests:**
+**All Tests Passing:**
 1. ✅ TestSpanIngestionAndQuery - Full span pipeline working
-2. ✅ TestLogIngestionAndCorrelation - Logs ingestion verified
-3. ✅ TestAttributeExtraction - Native vs JSON attributes working
-4. ✅ TestOQLGetExemplars - Exemplar extraction functional
-5. ✅ TestEndToEndQueryFlow - Complete OTLP → Kafka → Pinot → OQL
-6. ✅ TestSpanIngestionAndQuery - Unique trace IDs working
+2. ✅ TestMetricWithExemplarIngestion - Exemplar trace_id captured, wormhole functional
+3. ✅ TestLogIngestionAndCorrelation - Logs ingestion and correlation verified
+4. ✅ TestAttributeExtraction - Native vs JSON attributes working correctly
+5. ✅ TestMultiTenantIsolation - Tenant isolation enforced across all signals
+6. ✅ TestOQLExpandOperation - Trace expansion working with two-step execution
+7. ✅ TestOQLGetExemplars - Exemplar extraction functional
+8. ✅ TestEndToEndQueryFlow - Complete OTLP → Kafka → Pinot → OQL flow
 
-**Failing Tests (due to REALTIME table data accumulation):**
-1. ⚠️ TestMetricWithExemplarIngestion - Old data interference
-2. ⚠️ TestMultiTenantIsolation - Timing/old data
-3. ⚠️ TestOQLExpandOperation - Timing/old data
+**Critical Fixes Applied:**
+- Fixed HTTP header name mismatch (tenant-id vs X-Tenant-ID)
+- Rewrote expand operation to avoid Pinot subquery limitations
+- Improved test resilience against REALTIME table data accumulation
 
 ### ✅ Unit Tests
 
@@ -315,19 +318,22 @@ All dependencies use Apache 2.0 license as required:
 
 ## Recent Bug Fixes
 
-1. ✅ **OQL Operator Conversion**: `==` now properly converts to `=` in SQL
-2. ✅ **Gauge Exemplars**: Added exemplar extraction to gauge metrics
-3. ✅ **Pinot Port Confusion**: Separated controller (9000) vs broker (8000)
-4. ✅ **Trace ID Format**: Fixed test data to use proper hex format
-5. ✅ **Metrics Not Publishing**: Added debug logging, found missing conversion
+1. ✅ **Multi-Tenant Header Mismatch**: Fixed HeaderTenantID constant from "X-Tenant-ID" to "tenant-id" to match client requests
+2. ✅ **OQL Expand Operation**: Rewrote to use two-step execution (Pinot doesn't support subqueries in IN clauses)
+3. ✅ **Test Data Resilience**: Updated tests to handle REALTIME table data accumulation
+4. ✅ **OQL Operator Conversion**: `==` now properly converts to `=` in SQL
+5. ✅ **Gauge Exemplars**: Added exemplar extraction to gauge metrics
+6. ✅ **Pinot Port Confusion**: Separated controller (9000) vs broker (8000)
+7. ✅ **Trace ID Format**: Fixed test data to use proper hex format
+8. ✅ **Metrics Not Publishing**: Added debug logging, found missing conversion
 
 ## Known Limitations
 
 1. **REALTIME Table Data**: Cannot delete data (accumulates across test runs)
 2. **Simplified OQL Parser**: Uses basic string manipulation; production needs proper lexer/parser
 3. **No Query Caching**: No result caching for progressive refinement
-4. **Limited Expand**: Expand operation needs more testing with large traces
-5. **Multi-Tenant Test**: Occasionally fails due to timing/data accumulation
+4. **Expand Performance**: Two-step execution adds latency; consider optimization for large trace sets
+5. **Correlate Operation**: Not yet fully implemented (expand works, correlate needs similar treatment)
 
 ## Performance Characteristics
 
@@ -345,10 +351,11 @@ All dependencies use Apache 2.0 license as required:
 ## Next Steps (Future Work)
 
 ### High Priority
-1. **Fix Remaining Tests**: Address timing issues in 3 failing tests
+1. ✅ ~~**Fix Remaining Tests**: Address timing issues in 3 failing tests~~ - **COMPLETED**
 2. **Performance Testing**: Load test with realistic data volumes
 3. **Query Optimization**: Add caching for expand/correlate operations
-4. **Error Handling**: Improve error messages and recovery
+4. **Correlate Operation**: Implement two-step execution like expand
+5. **Error Handling**: Improve error messages and recovery
 
 ### Medium Priority
 5. **Observability**: Add structured logging and metrics
@@ -376,18 +383,18 @@ All dependencies use Apache 2.0 license as required:
 
 ## Production Readiness Checklist
 
-- ✅ Multi-tenant isolation enforced
+- ✅ Multi-tenant isolation enforced (100% test coverage)
 - ✅ OTLP receivers (gRPC + HTTP)
 - ✅ Kafka streaming integration
 - ✅ Pinot REALTIME tables
-- ✅ OQL query engine
-- ✅ Config file support
-- ✅ Integration tests (75% passing)
-- ✅ Debug logging
-- ✅ Docker Compose setup
+- ✅ OQL query engine with expand operation
+- ✅ Config file support (YAML + CLI + env vars)
+- ✅ Integration tests (100% passing - 8/8)
+- ✅ Debug logging throughout pipeline
+- ✅ Docker Compose setup for development
 - ⚠️ Performance testing needed
-- ⚠️ Production error handling
-- ⚠️ Monitoring/observability
+- ⚠️ Production error handling improvements
+- ⚠️ Monitoring/observability instrumentation
 
 ## Resources
 
@@ -404,4 +411,5 @@ All dependencies use Apache 2.0 license as required:
 ---
 
 **Checkpoint created**: March 23, 2026
-**Next session should focus on**: Performance testing, remaining test fixes, production hardening
+**Test Status**: ✅ 100% Pass Rate (8/8 tests passing)
+**Next session should focus on**: Performance testing, correlate operation implementation, production hardening
