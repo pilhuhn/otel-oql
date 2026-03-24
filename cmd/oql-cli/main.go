@@ -73,10 +73,155 @@ func main() {
 		os.Exit(0)
 	}
 
-	// Get query from args or stdin
+	// Check if running in interactive mode
+	isInteractive := flag.NArg() == 0
+
+	if isInteractive {
+		// Check if stdin is actually a terminal
+		stat, _ := os.Stdin.Stat()
+		isInteractive = (stat.Mode() & os.ModeCharDevice) != 0
+	}
+
+	if isInteractive {
+		// Interactive REPL mode
+		runInteractiveMode(*endpoint, *tenantID, *verbose, *jsonOutput)
+	} else {
+		// Single query mode
+		runSingleQuery(*endpoint, *tenantID, *verbose, *jsonOutput)
+	}
+}
+
+// runInteractiveMode runs the CLI in interactive REPL mode
+func runInteractiveMode(endpoint, tenantID string, verbose, jsonOutput bool) {
+	fmt.Fprintf(os.Stderr, "OQL Interactive Shell (type 'help' for examples, 'exit' or Ctrl+D to quit)\n\n")
+
+	scanner := bufio.NewScanner(os.Stdin)
+	var lastSuccessfulQuery string
+
+	for {
+		fmt.Fprintf(os.Stderr, "oql> ")
+
+		if !scanner.Scan() {
+			// EOF (Ctrl+D)
+			fmt.Fprintf(os.Stderr, "\nGoodbye!\n")
+			break
+		}
+
+		input := strings.TrimSpace(scanner.Text())
+
+		// Skip empty lines
+		if input == "" {
+			continue
+		}
+
+		// Check for exit command
+		if strings.ToLower(input) == "exit" || strings.ToLower(input) == "quit" {
+			fmt.Fprintf(os.Stderr, "Goodbye!\n")
+			break
+		}
+
+		// Check for help command
+		if strings.ToLower(input) == "help" {
+			showHelp()
+			continue
+		}
+
+		// Determine if this is a refinement operation or a new query
+		query := input
+		isRefinement := isRefinementOperation(input)
+
+		if isRefinement {
+			if lastSuccessfulQuery == "" {
+				fmt.Fprintf(os.Stderr, "Error: No previous query to refine. Start with a signal= query first.\n\n")
+				continue
+			}
+			// Append refinement to last query
+			query = lastSuccessfulQuery + " | " + input
+			fmt.Fprintf(os.Stderr, "Refining previous query: %s\n", query)
+		}
+
+		// Execute query with retry on error
+		resp, err := executeQueryWithRetry(endpoint, tenantID, query)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n\n", err)
+			continue
+		}
+
+		// Handle error response
+		if resp.Error != "" {
+			fmt.Fprintf(os.Stderr, "Error: %s\n\n", resp.Error)
+			continue
+		}
+
+		// Query succeeded - save it for potential refinement
+		if !isRefinement {
+			lastSuccessfulQuery = query
+		} else {
+			// Update last query to include the refinement
+			lastSuccessfulQuery = query
+		}
+
+		// Output results
+		if jsonOutput {
+			jsonBytes, err := json.MarshalIndent(resp, "", "  ")
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Error marshaling JSON: %v\n\n", err)
+				continue
+			}
+			fmt.Println(string(jsonBytes))
+		} else {
+			printResults(resp, verbose)
+		}
+
+		fmt.Fprintf(os.Stderr, "\n") // Add spacing between queries
+	}
+
+	if err := scanner.Err(); err != nil {
+		fmt.Fprintf(os.Stderr, "Error reading input: %v\n", err)
+		os.Exit(1)
+	}
+}
+
+// isRefinementOperation checks if the input is a refinement operation
+// rather than a new query
+func isRefinementOperation(input string) bool {
+	lowerInput := strings.ToLower(strings.TrimSpace(input))
+
+	// Operations that refine existing results
+	refinementOps := []string{
+		"filter ",
+		"limit ",
+		"expand ",
+		"correlate ",
+		"get_exemplars",
+		"switch_context ",
+		"extract ",
+		"group ",
+		"aggregate ",
+		"avg(",
+		"min(",
+		"max(",
+		"count(",
+		"sum(",
+		"since ",
+		"between ",
+	}
+
+	for _, op := range refinementOps {
+		if strings.HasPrefix(lowerInput, op) {
+			return true
+		}
+	}
+
+	return false
+}
+
+// runSingleQuery runs a single query and exits
+func runSingleQuery(endpoint, tenantID string, verbose, jsonOutput bool) {
 	var query string
+
 	if flag.NArg() > 0 {
-		// Query provided as command line arguments
+		// Query from command line args
 		query = strings.Join(flag.Args(), " ")
 
 		// Check for help command
@@ -85,7 +230,7 @@ func main() {
 			os.Exit(0)
 		}
 	} else {
-		// Read from stdin (interactive mode)
+		// Read from stdin (piped input)
 		query = readQueryInteractive()
 	}
 
@@ -97,21 +242,20 @@ func main() {
 	}
 
 	// Execute query with retry on error
-	resp, err := executeQueryWithRetry(*endpoint, *tenantID, query)
+	resp, err := executeQueryWithRetry(endpoint, tenantID, query)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
 
-	// Handle error response (should not happen if executeQueryWithRetry works correctly)
+	// Handle error response
 	if resp.Error != "" {
 		fmt.Fprintf(os.Stderr, "Error: %s\n", resp.Error)
 		os.Exit(1)
 	}
 
 	// Output results
-	if *jsonOutput {
-		// Raw JSON output
+	if jsonOutput {
 		jsonBytes, err := json.MarshalIndent(resp, "", "  ")
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error marshaling JSON: %v\n", err)
@@ -119,8 +263,7 @@ func main() {
 		}
 		fmt.Println(string(jsonBytes))
 	} else {
-		// Pretty-printed table output
-		printResults(resp, *verbose)
+		printResults(resp, verbose)
 	}
 }
 
@@ -210,8 +353,8 @@ COMMON OPERATIONS:
   group by <fields>              Group results
 
 CONDITIONS:
-  field == "value"               String equality (use == not =)
-  field == 123                   Number equality
+  field = "value" or ==          String equality (both = and == work)
+  field = 123                    Number equality
   field > 100                    Numeric comparison (>, <, >=, <=, !=)
   cond1 and cond2                Logical AND
   cond1 or cond2                 Logical OR
@@ -246,11 +389,11 @@ EXAMPLES:
   signal=spans group by service_name | aggregate avg(duration)
 
 TIPS:
-  - Use == for equality (not =)
-  - Strings need quotes: service_name == "payment"
+  - Both = and == work for equality
+  - Strings need quotes: service_name = "payment"
   - Numbers don't: duration > 1000
   - Duration is in nanoseconds (1s = 1000000000ns)
-  - Press Ctrl+D to exit
+  - Type 'exit' or Ctrl+D to quit interactive mode
 `
 	fmt.Println(help)
 }
@@ -431,58 +574,77 @@ func printTableHeader(columns []string) {
 func suggestQueryFix(query, errorMsg string) string {
 	// Common error patterns and their fixes
 
-	// Pattern 1: "invalid condition: X=Y" (missing quotes or wrong operator)
-	// Example: "where service=replicator" -> "where service_name == \"replicator\""
+	// Pattern 1: "invalid condition: X=Y" (missing quotes or field name issue)
+	// Example: "where service=replicator" -> "where service_name = \"replicator\""
 	if strings.Contains(errorMsg, "invalid condition:") {
 		// Extract the problematic condition from error message
 		parts := strings.Split(errorMsg, "invalid condition: ")
 		if len(parts) >= 2 {
 			badCondition := strings.TrimSpace(parts[1])
 
-			// Check if it's using = instead of ==
-			if strings.Contains(badCondition, "=") && !strings.Contains(badCondition, "==") {
-				// Try to fix it
-				eqIdx := strings.Index(badCondition, "=")
-				if eqIdx > 0 && eqIdx < len(badCondition)-1 {
-					left := strings.TrimSpace(badCondition[:eqIdx])
-					right := strings.TrimSpace(badCondition[eqIdx+1:])
+			// Try to find an equals sign (either = or ==)
+			var eqIdx int
+			var opLen int
+			if idx := strings.Index(badCondition, "=="); idx != -1 {
+				eqIdx = idx
+				opLen = 2
+			} else if idx := strings.Index(badCondition, "="); idx != -1 {
+				eqIdx = idx
+				opLen = 1
+			} else {
+				// No equals sign, can't fix
+				return ""
+			}
 
-					// Common field name mappings
-					fieldMap := map[string]string{
-						"service":  "service_name",
-						"name":     "name",
-						"trace":    "trace_id",
-						"span":     "span_id",
-						"status":   "status_code",
-						"duration": "duration",
-					}
+			if eqIdx > 0 && eqIdx < len(badCondition)-opLen {
+				left := strings.TrimSpace(badCondition[:eqIdx])
+				right := strings.TrimSpace(badCondition[eqIdx+opLen:])
 
-					// Map field name if needed
-					if mapped, ok := fieldMap[left]; ok {
-						left = mapped
-					}
-
-					// Add quotes if right side doesn't have them and isn't a number
-					if !strings.HasPrefix(right, "\"") && !strings.HasPrefix(right, "'") {
-						if _, err := strconv.Atoi(right); err != nil {
-							// Not a number, add quotes
-							right = "\"" + right + "\""
-						}
-					}
-
-					// Build the corrected condition
-					fixedCondition := left + " == " + right
-
-					// Replace in the original query
-					return strings.Replace(query, badCondition, fixedCondition, 1)
+				// Common field name mappings
+				fieldMap := map[string]string{
+					"service":  "service_name",
+					"name":     "name",
+					"trace":    "trace_id",
+					"span":     "span_id",
+					"status":   "status_code",
+					"duration": "duration",
 				}
+
+				// Map field name if needed
+				if mapped, ok := fieldMap[left]; ok {
+					left = mapped
+				}
+
+				// Add quotes if right side doesn't have them and isn't a number
+				if !strings.HasPrefix(right, "\"") && !strings.HasPrefix(right, "'") {
+					if _, err := strconv.Atoi(right); err != nil {
+						// Not a number, add quotes
+						right = "\"" + right + "\""
+					}
+				}
+
+				// Build the corrected condition (keep operator simple)
+				fixedCondition := left + " = " + right
+
+				// Replace in the original query
+				return strings.Replace(query, badCondition, fixedCondition, 1)
 			}
 		}
 	}
 
 	// Pattern 2: "query must start with 'signal='"
 	if strings.Contains(errorMsg, "query must start with 'signal='") {
-		// Add signal=spans as default
+		// Check if query starts with "signal " (with space instead of =)
+		if strings.HasPrefix(strings.ToLower(query), "signal ") {
+			// Remove spaces around = in "signal = type"
+			fixedQuery := strings.Replace(query, "signal ", "signal=", 1)
+			// Also remove space after = if present
+			if strings.HasPrefix(strings.ToLower(fixedQuery), "signal= ") {
+				fixedQuery = strings.Replace(fixedQuery, "signal= ", "signal=", 1)
+			}
+			return fixedQuery
+		}
+		// Otherwise add signal=spans as default
 		return "signal=spans " + query
 	}
 

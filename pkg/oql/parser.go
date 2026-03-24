@@ -158,8 +158,8 @@ func (p *Parser) parseCondition() (Condition, error) {
 
 // parseSingleCondition parses a single binary condition
 func (p *Parser) parseSingleCondition(s string) (Condition, error) {
-	// Try different operators
-	operators := []string{"==", "!=", ">=", "<=", ">", "<"}
+	// Try different operators (order matters: check multi-char operators before single-char)
+	operators := []string{"==", "!=", ">=", "<=", ">", "<", "="}
 	for _, op := range operators {
 		if idx := strings.Index(s, op); idx != -1 {
 			left := strings.TrimSpace(s[:idx])
