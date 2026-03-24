@@ -36,18 +36,11 @@ func (p *Parser) Parse() (*Query, error) {
 	signalStr := p.readUntil(operationKeywords())
 	signalStr = strings.TrimSpace(signalStr)
 
-	switch signalStr {
-	case "metrics":
-		query.Signal = SignalMetrics
-	case "logs":
-		query.Signal = SignalLogs
-	case "spans":
-		query.Signal = SignalSpans
-	case "traces":
-		query.Signal = SignalTraces
-	default:
-		return nil, fmt.Errorf("invalid signal type: %s", signalStr)
+	signal, err := normalizeSignalType(signalStr)
+	if err != nil {
+		return nil, err
 	}
+	query.Signal = signal
 
 	// Parse operations
 	for p.pos < len(p.input) {
@@ -258,18 +251,11 @@ func (p *Parser) parseCorrelate() (Operation, error) {
 	signals := make([]SignalType, 0)
 	for _, s := range signalStrs {
 		s = strings.TrimSpace(s)
-		switch s {
-		case "metrics":
-			signals = append(signals, SignalMetrics)
-		case "logs":
-			signals = append(signals, SignalLogs)
-		case "spans":
-			signals = append(signals, SignalSpans)
-		case "traces":
-			signals = append(signals, SignalTraces)
-		default:
+		signal, err := normalizeSignalType(s)
+		if err != nil {
 			return nil, fmt.Errorf("invalid signal type in correlate: %s", s)
 		}
+		signals = append(signals, signal)
 	}
 
 	return &CorrelateOp{Signals: signals}, nil
@@ -305,18 +291,9 @@ func (p *Parser) parseSwitchContext() (Operation, error) {
 	signalStr := p.readUntil(operationKeywords())
 	signalStr = strings.TrimSpace(signalStr)
 
-	var signal SignalType
-	switch signalStr {
-	case "metrics":
-		signal = SignalMetrics
-	case "logs":
-		signal = SignalLogs
-	case "spans":
-		signal = SignalSpans
-	case "traces":
-		signal = SignalTraces
-	default:
-		return nil, fmt.Errorf("invalid signal type: %s", signalStr)
+	signal, err := normalizeSignalType(signalStr)
+	if err != nil {
+		return nil, err
 	}
 
 	return &SwitchContextOp{Signal: signal}, nil
@@ -463,6 +440,29 @@ func parseDuration(s string) (time.Duration, error) {
 
 	// Use Go's duration parser for other formats
 	return time.ParseDuration(s)
+}
+
+// normalizeSignalType converts various signal type representations to a canonical SignalType
+// Accepts: plural, singular, abbreviations, case-insensitive
+func normalizeSignalType(s string) (SignalType, error) {
+	s = strings.ToLower(strings.TrimSpace(s))
+
+	switch s {
+	// Metrics
+	case "metrics", "metric", "m":
+		return SignalMetrics, nil
+	// Logs
+	case "logs", "log", "l":
+		return SignalLogs, nil
+	// Spans
+	case "spans", "span", "s":
+		return SignalSpans, nil
+	// Traces
+	case "traces", "trace", "t":
+		return SignalTraces, nil
+	default:
+		return "", fmt.Errorf("invalid signal type: %s (expected: metrics/m, logs/l, spans/s, or traces/t)", s)
+	}
 }
 
 // parseAggregate parses an aggregate operation

@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 )
 
@@ -112,14 +113,14 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Execute query
-	resp, err := executeQuery(*endpoint, *tenantID, query)
+	// Execute query with retry on error
+	resp, err := executeQueryWithRetry(*endpoint, *tenantID, query)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
 
-	// Handle error response
+	// Handle error response (should not happen if executeQueryWithRetry works correctly)
 	if resp.Error != "" {
 		fmt.Fprintf(os.Stderr, "Error: %s\n", resp.Error)
 		os.Exit(1)
@@ -137,6 +138,64 @@ func main() {
 	} else {
 		// Pretty-printed table output
 		printResults(resp, *verbose)
+	}
+}
+
+// executeQueryWithRetry executes a query and offers suggestions on errors
+func executeQueryWithRetry(endpoint, tenantID, originalQuery string) (*QueryResponse, error) {
+	query := originalQuery
+
+	for {
+		resp, err := executeQuery(endpoint, tenantID, query)
+		if err != nil {
+			return nil, err
+		}
+
+		// If no error, return the response
+		if resp.Error == "" {
+			return resp, nil
+		}
+
+		// We have an error - try to suggest a fix
+		suggestion := suggestQueryFix(query, resp.Error)
+		if suggestion == "" {
+			// No suggestion available, just return the error
+			return resp, nil
+		}
+
+		// Print the error and suggestion
+		fmt.Fprintf(os.Stderr, "\nError: %s\n\n", resp.Error)
+		fmt.Fprintf(os.Stderr, "Suggestion: %s\n\n", suggestion)
+		fmt.Fprintf(os.Stderr, "Try this instead? (y/n/edit): ")
+
+		// Read user input
+		var choice string
+		fmt.Scanln(&choice)
+		choice = strings.ToLower(strings.TrimSpace(choice))
+
+		switch choice {
+		case "y", "yes":
+			// Use the suggested query
+			query = suggestion
+			fmt.Fprintf(os.Stderr, "\nRetrying with: %s\n\n", query)
+			continue
+		case "e", "edit":
+			// Let user edit the query
+			fmt.Fprintf(os.Stderr, "Enter corrected query: ")
+			scanner := bufio.NewScanner(os.Stdin)
+			if scanner.Scan() {
+				query = scanner.Text()
+				if query == "" {
+					return resp, nil // User gave up
+				}
+				fmt.Fprintf(os.Stderr, "\nRetrying with: %s\n\n", query)
+				continue
+			}
+			return resp, nil
+		default:
+			// User declined, return the error
+			return resp, nil
+		}
 	}
 }
 
@@ -177,10 +236,11 @@ func executeQuery(endpoint, tenantID, query string) (*QueryResponse, error) {
 		// Try to parse error from JSON response
 		var errorResp QueryResponse
 		if err := json.Unmarshal(body, &errorResp); err == nil && errorResp.Error != "" {
-			return nil, fmt.Errorf("%s", errorResp.Error)
+			// Return the response with error for better error handling
+			return &errorResp, nil
 		}
-		// Fallback to raw body
-		return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(body))
+		// Fallback to raw body as error
+		return &QueryResponse{Error: fmt.Sprintf("HTTP %d: %s", resp.StatusCode, string(body))}, nil
 	}
 
 	// Parse response
@@ -251,6 +311,97 @@ func printTableHeader(columns []string) {
 		fmt.Print(strings.Repeat("-", width+2))
 	}
 	fmt.Println()
+}
+
+// suggestQueryFix analyzes an error and suggests a corrected query
+func suggestQueryFix(query, errorMsg string) string {
+	// Common error patterns and their fixes
+
+	// Pattern 1: "invalid condition: X=Y" (missing quotes or wrong operator)
+	// Example: "where service=replicator" -> "where service_name == \"replicator\""
+	if strings.Contains(errorMsg, "invalid condition:") {
+		// Extract the problematic condition from error message
+		parts := strings.Split(errorMsg, "invalid condition: ")
+		if len(parts) >= 2 {
+			badCondition := strings.TrimSpace(parts[1])
+
+			// Check if it's using = instead of ==
+			if strings.Contains(badCondition, "=") && !strings.Contains(badCondition, "==") {
+				// Try to fix it
+				eqIdx := strings.Index(badCondition, "=")
+				if eqIdx > 0 && eqIdx < len(badCondition)-1 {
+					left := strings.TrimSpace(badCondition[:eqIdx])
+					right := strings.TrimSpace(badCondition[eqIdx+1:])
+
+					// Common field name mappings
+					fieldMap := map[string]string{
+						"service":  "service_name",
+						"name":     "name",
+						"trace":    "trace_id",
+						"span":     "span_id",
+						"status":   "status_code",
+						"duration": "duration",
+					}
+
+					// Map field name if needed
+					if mapped, ok := fieldMap[left]; ok {
+						left = mapped
+					}
+
+					// Add quotes if right side doesn't have them and isn't a number
+					if !strings.HasPrefix(right, "\"") && !strings.HasPrefix(right, "'") {
+						if _, err := strconv.Atoi(right); err != nil {
+							// Not a number, add quotes
+							right = "\"" + right + "\""
+						}
+					}
+
+					// Build the corrected condition
+					fixedCondition := left + " == " + right
+
+					// Replace in the original query
+					return strings.Replace(query, badCondition, fixedCondition, 1)
+				}
+			}
+		}
+	}
+
+	// Pattern 2: "query must start with 'signal='"
+	if strings.Contains(errorMsg, "query must start with 'signal='") {
+		// Add signal=spans as default
+		return "signal=spans " + query
+	}
+
+	// Pattern 3: "invalid signal type: X"
+	if strings.Contains(errorMsg, "invalid signal type:") {
+		parts := strings.Split(errorMsg, "invalid signal type: ")
+		if len(parts) >= 2 {
+			invalidSignal := strings.TrimSpace(parts[1])
+			// Remove trailing text like " (expected: ..."
+			if idx := strings.Index(invalidSignal, " ("); idx > 0 {
+				invalidSignal = invalidSignal[:idx]
+			}
+
+			// Try to guess the intended signal
+			signalMap := map[string]string{
+				"span":    "spans",
+				"trace":   "traces",
+				"metric":  "metrics",
+				"log":     "logs",
+				"tracing": "traces",
+				"logging": "logs",
+			}
+
+			if corrected, ok := signalMap[strings.ToLower(invalidSignal)]; ok {
+				return strings.Replace(query, "signal="+invalidSignal, "signal="+corrected, 1)
+			}
+		}
+	}
+
+	// Pattern 4: Missing quotes around string values
+	// This is already handled by Pattern 1, but we could enhance it
+
+	return "" // No suggestion available
 }
 
 // printTableRow prints a single table row
