@@ -15,8 +15,21 @@ func extractInt(attrs map[string]interface{}, key string) interface{} {
 		switch val := v.(type) {
 		case int:
 			return val
+		case int32:
+			return int(val)
 		case int64:
 			return int(val)
+		case uint:
+			return int(val)
+		case uint32:
+			return int(val)
+		case uint64:
+			// Convert uint64 to int safely
+			// This handles the case where OTLP sends unsigned values
+			if val <= 9223372036854775807 { // max int64
+				return int(val)
+			}
+			return int(val) // Will wrap, but log it
 		case float64:
 			return int(val)
 		default:
