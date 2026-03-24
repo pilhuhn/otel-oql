@@ -158,7 +158,8 @@ func (s *Server) handleQuery(w http.ResponseWriter, r *http.Request) {
 					querySuccess = false
 					s.obs.RecordError(ctx, "query_execution_failure", "api_server")
 					s.obs.RecordRequest(ctx, "/query", time.Since(start), http.StatusInternalServerError)
-					s.sendErrorResponse(w, fmt.Sprintf("failed to execute query: %v", err))
+					// Pass through the error message directly from Pinot client (it's already user-friendly)
+					s.sendErrorResponse(w, err.Error())
 					return
 				}
 				results = append(results, result)
@@ -166,14 +167,16 @@ func (s *Server) handleQuery(w http.ResponseWriter, r *http.Request) {
 				querySuccess = false
 				s.obs.RecordError(ctx, "correlate_failure", "api_server")
 				s.obs.RecordRequest(ctx, "/query", time.Since(start), http.StatusInternalServerError)
-				s.sendErrorResponse(w, fmt.Sprintf("failed to execute correlate query: %v", err))
+				// Pass through the error message directly
+				s.sendErrorResponse(w, err.Error())
 				return
 			}
 		} else {
 			querySuccess = false
 			s.obs.RecordError(ctx, "expand_failure", "api_server")
 			s.obs.RecordRequest(ctx, "/query", time.Since(start), http.StatusInternalServerError)
-			s.sendErrorResponse(w, fmt.Sprintf("failed to execute expand query: %v", err))
+			// Pass through the error message directly
+			s.sendErrorResponse(w, err.Error())
 			return
 		}
 	}
@@ -208,6 +211,9 @@ func (s *Server) executeQuery(ctx context.Context, sql string) (QueryResult, err
 			TimeUsedMs:     resp.TimeUsedMs,
 		},
 	}
+
+	// Filter out tenant_id from response
+	filterTenantID(&result)
 
 	return result, nil
 }
@@ -256,7 +262,8 @@ func (s *Server) executeExpandQuery(ctx context.Context, sql string, tenantID in
 	fmt.Printf("DEBUG EXPAND: Executing base query to get trace_ids\n")
 	resp1, err := s.pinotClient.Query(ctx, baseSQL)
 	if err != nil {
-		return QueryResult{}, fmt.Errorf("failed to execute base query for expand: %w", err)
+		// Pass through the Pinot error (already user-friendly)
+		return QueryResult{}, err
 	}
 
 	// Step 2: Extract unique trace_ids from results
@@ -316,7 +323,8 @@ func (s *Server) executeExpandQuery(ctx context.Context, sql string, tenantID in
 	// Step 4: Execute the expand query
 	resp2, err := s.pinotClient.Query(ctx, expandSQL)
 	if err != nil {
-		return QueryResult{}, fmt.Errorf("failed to execute expand query: %w", err)
+		// Pass through the Pinot error (already user-friendly)
+		return QueryResult{}, err
 	}
 
 	result := QueryResult{
@@ -329,6 +337,9 @@ func (s *Server) executeExpandQuery(ctx context.Context, sql string, tenantID in
 			TimeUsedMs:     resp2.TimeUsedMs,
 		},
 	}
+
+	// Filter out tenant_id from response
+	filterTenantID(&result)
 
 	return result, nil
 }
@@ -402,7 +413,8 @@ func (s *Server) executeCorrelateQuery(ctx context.Context, sql string, tenantID
 	fmt.Printf("DEBUG CORRELATE: Executing base query to get trace_ids\n")
 	resp1, err := s.pinotClient.Query(ctx, baseSQL)
 	if err != nil {
-		return nil, fmt.Errorf("failed to execute base query for correlate: %w", err)
+		// Pass through the Pinot error (already user-friendly)
+		return nil, err
 	}
 
 	// Step 2: Extract unique trace_ids from results
@@ -457,6 +469,7 @@ func (s *Server) executeCorrelateQuery(ctx context.Context, sql string, tenantID
 			TimeUsedMs:     resp1.TimeUsedMs,
 		},
 	}
+	filterTenantID(&baseResult)
 	results = append(results, baseResult)
 
 	// Query correlated signals
@@ -494,6 +507,7 @@ func (s *Server) executeCorrelateQuery(ctx context.Context, sql string, tenantID
 				TimeUsedMs:     resp.TimeUsedMs,
 			},
 		}
+		filterTenantID(&result)
 		results = append(results, result)
 	}
 
@@ -522,4 +536,44 @@ func (s *Server) sendErrorResponse(w http.ResponseWriter, errMsg string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusBadRequest)
 	json.NewEncoder(w).Encode(response)
+}
+
+// filterTenantID removes tenant_id column from query results
+// Tenants should not see the tenant_id in responses since they already know their own tenant
+func filterTenantID(result *QueryResult) {
+	// Find the tenant_id column index
+	tenantIDIdx := -1
+	for i, col := range result.Columns {
+		if col == "tenant_id" {
+			tenantIDIdx = i
+			break
+		}
+	}
+
+	// If tenant_id column not found, nothing to filter
+	if tenantIDIdx == -1 {
+		return
+	}
+
+	// Remove tenant_id from columns
+	newColumns := make([]string, 0, len(result.Columns)-1)
+	for i, col := range result.Columns {
+		if i != tenantIDIdx {
+			newColumns = append(newColumns, col)
+		}
+	}
+	result.Columns = newColumns
+
+	// Remove tenant_id value from each row
+	newRows := make([][]interface{}, len(result.Rows))
+	for i, row := range result.Rows {
+		newRow := make([]interface{}, 0, len(row)-1)
+		for j, val := range row {
+			if j != tenantIDIdx {
+				newRow = append(newRow, val)
+			}
+		}
+		newRows[i] = newRow
+	}
+	result.Rows = newRows
 }

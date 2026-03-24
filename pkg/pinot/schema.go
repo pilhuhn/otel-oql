@@ -141,7 +141,7 @@ func getSpansSchema() *PinotSchema {
 			// Common OTel Semantic Conventions - extracted for performance
 			{Name: "service_name", DataType: "STRING"},
 			{Name: "http_method", DataType: "STRING"},
-			{Name: "http_status_code", DataType: "INT"},
+			{Name: "http_status_code", DataType: "INT", DefaultNullValue: -1}, // -1 indicates no HTTP status (valid range: 100-599)
 			{Name: "http_route", DataType: "STRING"},
 			{Name: "http_target", DataType: "STRING"},
 			{Name: "db_system", DataType: "STRING"},
@@ -203,7 +203,7 @@ func getSpansTableConfig() *TableConfig {
 			StreamConfigs: map[string]string{
 				"streamType":                                    "kafka",
 				"stream.kafka.topic.name":                       "otel-spans",
-				"stream.kafka.broker.list":                      "kafka:29092",
+				"stream.kafka.broker.list":                      "kafka:9092",
 				"stream.kafka.consumer.type":                    "lowlevel",
 				"stream.kafka.consumer.factory.class.name":      "org.apache.pinot.plugin.stream.kafka20.KafkaConsumerFactory",
 				"stream.kafka.decoder.class.name":               "org.apache.pinot.plugin.inputformat.json.JSONMessageDecoder",
@@ -289,7 +289,7 @@ func getMetricsTableConfig() *TableConfig {
 			StreamConfigs: map[string]string{
 				"streamType":                                    "kafka",
 				"stream.kafka.topic.name":                       "otel-metrics",
-				"stream.kafka.broker.list":                      "kafka:29092",
+				"stream.kafka.broker.list":                      "kafka:9092",
 				"stream.kafka.consumer.type":                    "lowlevel",
 				"stream.kafka.consumer.factory.class.name":      "org.apache.pinot.plugin.stream.kafka20.KafkaConsumerFactory",
 				"stream.kafka.decoder.class.name":               "org.apache.pinot.plugin.inputformat.json.JSONMessageDecoder",
@@ -370,7 +370,7 @@ func getLogsTableConfig() *TableConfig {
 			StreamConfigs: map[string]string{
 				"streamType":                                    "kafka",
 				"stream.kafka.topic.name":                       "otel-logs",
-				"stream.kafka.broker.list":                      "kafka:29092",
+				"stream.kafka.broker.list":                      "kafka:9092",
 				"stream.kafka.consumer.type":                    "lowlevel",
 				"stream.kafka.consumer.factory.class.name":      "org.apache.pinot.plugin.stream.kafka20.KafkaConsumerFactory",
 				"stream.kafka.decoder.class.name":               "org.apache.pinot.plugin.inputformat.json.JSONMessageDecoder",

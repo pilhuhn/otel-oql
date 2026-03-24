@@ -82,16 +82,24 @@ func removeKnownKeys(attrs map[string]interface{}, knownKeys []string) map[strin
 
 // spanKnownKeys are the OTel semantic convention attributes we extract for spans
 var spanKnownKeys = []string{
+	// HTTP attributes (old semantic conventions)
 	"http.method",
 	"http.status_code",
 	"http.route",
 	"http.target",
+	// HTTP attributes (new semantic conventions v1.21+)
+	"http.request.method",
+	"http.response.status_code",
+	// Database attributes
 	"db.system",
 	"db.statement",
+	// Messaging attributes
 	"messaging.system",
 	"messaging.destination",
+	// RPC attributes
 	"rpc.service",
 	"rpc.method",
+	// Error indicator (if present as attribute)
 	"error",
 }
 

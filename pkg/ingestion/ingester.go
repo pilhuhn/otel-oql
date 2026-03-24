@@ -62,6 +62,30 @@ func (i *Ingester) IngestTraces(ctx context.Context, tenantID int, traces ptrace
 				span := ss.Spans().At(idx)
 				attrs := span.Attributes().AsRaw()
 
+				// Debug: log all attributes
+				if len(attrs) > 0 {
+					attrsJSON, _ := json.Marshal(attrs)
+					fmt.Printf("DEBUG INGESTION: Span %s attributes: %s\n", span.Name(), string(attrsJSON))
+				}
+
+				// Determine error status from span status code
+				isError := span.Status().Code() == 2 // 2 = Error in OTLP
+
+				// Extract HTTP status code - try both old and new semantic conventions
+				httpStatusCode := extractInt(attrs, "http.status_code")
+				if httpStatusCode == nil {
+					httpStatusCode = extractInt(attrs, "http.response.status_code")
+				}
+
+				// Extract HTTP method - try both old and new conventions
+				httpMethod := extractString(attrs, "http.method")
+				if httpMethod == nil {
+					httpMethod = extractString(attrs, "http.request.method")
+				}
+
+				fmt.Printf("DEBUG INGESTION: Span %s - error=%v, http_status=%v, http_method=%v\n",
+					span.Name(), isError, httpStatusCode, httpMethod)
+
 				record := map[string]interface{}{
 					"tenant_id":      tenantID,
 					"trace_id":       span.TraceID().String(),
@@ -75,18 +99,18 @@ func (i *Ingester) IngestTraces(ctx context.Context, tenantID int, traces ptrace
 					"status_message": span.Status().Message(),
 
 					// Extract common semantic convention attributes
-					"service_name":         extractString(resourceAttrs, "service.name"),
-					"http_method":          extractString(attrs, "http.method"),
-					"http_status_code":     extractInt(attrs, "http.status_code"),
-					"http_route":           extractString(attrs, "http.route"),
-					"http_target":          extractString(attrs, "http.target"),
-					"db_system":            extractString(attrs, "db.system"),
-					"db_statement":         extractString(attrs, "db.statement"),
-					"messaging_system":     extractString(attrs, "messaging.system"),
+					"service_name":          extractString(resourceAttrs, "service.name"),
+					"http_method":           httpMethod,
+					"http_status_code":      httpStatusCode,
+					"http_route":            extractString(attrs, "http.route"),
+					"http_target":           extractString(attrs, "http.target"),
+					"db_system":             extractString(attrs, "db.system"),
+					"db_statement":          extractString(attrs, "db.statement"),
+					"messaging_system":      extractString(attrs, "messaging.system"),
 					"messaging_destination": extractString(attrs, "messaging.destination"),
-					"rpc_service":          extractString(attrs, "rpc.service"),
-					"rpc_method":           extractString(attrs, "rpc.method"),
-					"error":                extractBool(attrs, "error"),
+					"rpc_service":           extractString(attrs, "rpc.service"),
+					"rpc_method":            extractString(attrs, "rpc.method"),
+					"error":                 isError,
 
 					// Store remaining attributes as JSON
 					"attributes":          removeKnownKeys(attrs, spanKnownKeys),
