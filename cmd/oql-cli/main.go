@@ -93,10 +93,10 @@ func main() {
 
 // runInteractiveMode runs the CLI in interactive REPL mode
 func runInteractiveMode(endpoint, tenantID string, verbose, jsonOutput bool) {
-	fmt.Fprintf(os.Stderr, "OQL Interactive Shell (type 'help' for examples, 'exit' or Ctrl+D to quit)\n\n")
+	fmt.Fprintf(os.Stderr, "OQL Interactive Shell (type 'help' for examples, 'undo' to remove last refinement, 'exit' or Ctrl+D to quit)\n\n")
 
 	scanner := bufio.NewScanner(os.Stdin)
-	var lastSuccessfulQuery string
+	var queryHistory []string // Stack of queries for undo
 
 	for {
 		fmt.Fprintf(os.Stderr, "oql> ")
@@ -126,6 +126,37 @@ func runInteractiveMode(endpoint, tenantID string, verbose, jsonOutput bool) {
 			continue
 		}
 
+		// Check for undo command
+		if strings.ToLower(input) == "undo" || strings.ToLower(input) == "back" {
+			if len(queryHistory) <= 1 {
+				fmt.Fprintf(os.Stderr, "Nothing to undo. Already at the base query.\n\n")
+				continue
+			}
+			// Pop the last query
+			queryHistory = queryHistory[:len(queryHistory)-1]
+			lastQuery := queryHistory[len(queryHistory)-1]
+			fmt.Fprintf(os.Stderr, "Undid last refinement. Current query:\n→ %s\n\n", lastQuery)
+
+			// Re-execute the previous query to show results
+			resp, err := executeQueryWithRetry(endpoint, tenantID, lastQuery)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Error: %v\n\n", err)
+				continue
+			}
+			if resp.Error != "" {
+				fmt.Fprintf(os.Stderr, "Error: %s\n\n", resp.Error)
+				continue
+			}
+			if jsonOutput {
+				jsonBytes, _ := json.MarshalIndent(resp, "", "  ")
+				fmt.Println(string(jsonBytes))
+			} else {
+				printResults(resp, verbose)
+			}
+			fmt.Fprintf(os.Stderr, "\n")
+			continue
+		}
+
 		// Determine if this is a refinement operation or a new query
 		query := input
 		isRefinement := isRefinementOperation(input)
@@ -140,13 +171,18 @@ func runInteractiveMode(endpoint, tenantID string, verbose, jsonOutput bool) {
 			}
 		}
 
+		// Parse and convert time units in the query
+		query = convertTimeUnits(query)
+
 		if isRefinement {
-			if lastSuccessfulQuery == "" {
+			if len(queryHistory) == 0 {
 				fmt.Fprintf(os.Stderr, "Error: No previous query to refine. Start with a signal= query first.\n\n")
 				continue
 			}
 			// Append refinement to last query
-			query = lastSuccessfulQuery + " | " + input
+			lastQuery := queryHistory[len(queryHistory)-1]
+			query = lastQuery + " | " + input
+			query = convertTimeUnits(query)
 			fmt.Fprintf(os.Stderr, "→ %s\n", query)
 		}
 
@@ -163,12 +199,13 @@ func runInteractiveMode(endpoint, tenantID string, verbose, jsonOutput bool) {
 			continue
 		}
 
-		// Query succeeded - save it for potential refinement
+		// Query succeeded - save it to history for potential refinement/undo
 		if !isRefinement {
-			lastSuccessfulQuery = query
+			// New base query - clear history and start fresh
+			queryHistory = []string{query}
 		} else {
-			// Update last query to include the refinement
-			lastSuccessfulQuery = query
+			// Refinement - add to history
+			queryHistory = append(queryHistory, query)
 		}
 
 		// Output results
@@ -241,6 +278,77 @@ func looksLikeCondition(input string) bool {
 	}
 
 	return false
+}
+
+// convertTimeUnits converts time values with units (s, ms, ns) to nanoseconds
+// Examples: "duration > 5s" -> "duration > 5000000000"
+//           "duration < 100ms" -> "duration < 100000000"
+func convertTimeUnits(query string) string {
+	// Regex patterns for time values with units
+	// Match numbers followed by time units (s, ms, ns)
+	patterns := []struct {
+		unit       string
+		multiplier int64
+	}{
+		{"s", 1000000000},  // seconds to nanoseconds
+		{"ms", 1000000},    // milliseconds to nanoseconds
+		{"us", 1000},       // microseconds to nanoseconds
+		{"ns", 1},          // nanoseconds (no conversion)
+	}
+
+	result := query
+	for _, p := range patterns {
+		// Look for patterns like "123s" or "456ms"
+		// Use a simple approach: find number followed by unit
+		for {
+			idx := strings.Index(result, p.unit)
+			if idx == -1 || idx == 0 {
+				break
+			}
+
+			// Check if this is actually a time unit (preceded by a digit)
+			if idx > 0 && result[idx-1] >= '0' && result[idx-1] <= '9' {
+				// Find the start of the number
+				start := idx - 1
+				for start > 0 && ((result[start-1] >= '0' && result[start-1] <= '9') || result[start-1] == '.') {
+					start--
+				}
+
+				// Extract the number
+				numStr := result[start:idx]
+				if num, err := strconv.ParseFloat(numStr, 64); err == nil {
+					// Convert to nanoseconds
+					nanoseconds := int64(num * float64(p.multiplier))
+
+					// Check if there's a space or other character after the unit
+					// to avoid matching "msi" when looking for "ms"
+					endIdx := idx + len(p.unit)
+					if endIdx < len(result) {
+						nextChar := result[endIdx]
+						// Only convert if followed by space, operator, or end of string
+						if nextChar == ' ' || nextChar == '|' || nextChar == ')' || nextChar == '\n' {
+							// Replace the value with unit with nanoseconds
+							result = result[:start] + strconv.FormatInt(nanoseconds, 10) + result[endIdx:]
+							continue
+						}
+					} else {
+						// End of string
+						result = result[:start] + strconv.FormatInt(nanoseconds, 10)
+						break
+					}
+				}
+			}
+
+			// If we didn't convert, move past this occurrence to avoid infinite loop
+			// Replace this occurrence with a placeholder and continue
+			result = result[:idx] + "\x00" + p.unit + result[idx+len(p.unit):]
+		}
+
+		// Restore any placeholders
+		result = strings.ReplaceAll(result, "\x00"+p.unit, p.unit)
+	}
+
+	return result
 }
 
 // runSingleQuery runs a single query and exits
@@ -394,14 +502,14 @@ COMMON FIELDS:
 
 EXAMPLES:
 
-  # Find slow spans
-  signal=spans where duration > 1000000000 limit 10
+  # Find slow spans (using time units)
+  signal=spans where duration > 1s limit 10
 
   # Find errors from a service
-  signal=spans where service_name == "payment" and error == true limit 5
+  signal=spans where service_name = "payment" and error = true limit 5
 
   # Get full trace for a slow request
-  signal=spans where duration > 5000000000 limit 1 | expand trace
+  signal=spans where duration > 5s limit 1 | expand trace
 
   # Find logs correlated with error spans
   signal=spans where error == true limit 10 | correlate logs
@@ -418,8 +526,9 @@ EXAMPLES:
 TIPS:
   - Both = and == work for equality
   - Strings need quotes: service_name = "payment"
-  - Numbers don't: duration > 1000
-  - Duration is in nanoseconds (1s = 1000000000ns)
+  - Time units: duration > 5s, duration < 100ms (auto-converts to ns)
+  - Supported units: s (seconds), ms (milliseconds), us (microseconds), ns (nanoseconds)
+  - In REPL: type 'undo' to remove last refinement
   - Type 'exit' or Ctrl+D to quit interactive mode
 `
 	fmt.Println(help)
