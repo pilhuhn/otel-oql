@@ -1,6 +1,6 @@
 # OTEL-OQL Setup Scripts
 
-Automation scripts to help you get started with OTEL-OQL and Apache Pinot.
+Automation scripts to help you get started with OTEL-OQL, Apache Kafka, and Apache Pinot.
 
 ## Quick Start
 
@@ -13,19 +13,20 @@ Run everything in one command:
 ```
 
 This will:
-1. Build the OTEL-OQL binary
-2. Start Pinot in Podman
+1. Build the OTEL-OQL and CLI binaries
+2. Start Kafka and Pinot using `podman compose`
 3. Create all schemas and tables
 4. Verify the setup
 
 ### Option 2: Step by Step
 
 ```bash
-# 1. Start Pinot
-./scripts/start-pinot.sh
+# 1. Start infrastructure (Kafka + Pinot)
+podman compose up -d
 
-# 2. Build OTEL-OQL
+# 2. Build OTEL-OQL and CLI
 go build -o otel-oql ./cmd/otel-oql
+go build -o oql-cli ./cmd/oql-cli
 
 # 3. Create schemas
 ./otel-oql setup-schema --pinot-url=http://localhost:9000
@@ -34,26 +35,36 @@ go build -o otel-oql ./cmd/otel-oql
 ./scripts/verify-setup.sh
 ```
 
-## Scripts
+## Infrastructure
 
-### `start-pinot.sh`
+OTEL-OQL uses `podman compose` to manage all infrastructure services.
 
-Starts Apache Pinot in Podman all-in-one mode.
+**Services:**
+- **Kafka** - Message broker for streaming OTLP data
+- **Pinot** - Analytics database for storing and querying telemetry
 
-**What it does:**
-- Pulls Pinot Podman image
-- Starts container with proper port mappings (9000, 8099)
-- Waits for Pinot to be healthy
-- Handles existing containers gracefully
-
-**Usage:**
+**Start infrastructure:**
 ```bash
-./scripts/start-pinot.sh
+podman compose up -d
+```
+
+**Stop infrastructure:**
+```bash
+podman compose down
+```
+
+**View logs:**
+```bash
+podman compose logs kafka
+podman compose logs pinot
 ```
 
 **Ports:**
+- `9092` - Kafka broker
 - `9000` - Pinot Broker (query endpoint)
 - `8099` - Pinot Controller (admin API)
+
+## Scripts
 
 ### `verify-setup.sh`
 
@@ -100,26 +111,28 @@ Inserts sample data for testing.
 - 2 test metrics (with exemplar for trace correlation)
 - 1 test log entry
 
+**Prerequisites:**
+- Infrastructure running: `podman compose up -d`
+- OTEL-OQL service running: `./otel-oql --test-mode`
+
 **Usage:**
 ```bash
-# Requires Pinot to be running with schemas created
 ./scripts/insert-test-data.sh
 ```
 
 **Test queries after insertion:**
+```bash
+# Via OQL CLI (recommended)
+./oql-cli --tenant-id=0 "signal=spans limit 10"
+./oql-cli --tenant-id=0 "signal=metrics limit 10"
+./oql-cli --tenant-id=0 "signal=logs limit 10"
+```
+
 ```sql
--- Via Pinot SQL
+-- Via Pinot SQL (direct query)
 SELECT * FROM otel_spans WHERE tenant_id = 0;
 SELECT * FROM otel_metrics WHERE tenant_id = 0;
 SELECT * FROM otel_logs WHERE tenant_id = 0;
-```
-
-```bash
-# Via OQL (requires OTEL-OQL service running)
-curl -X POST http://localhost:8080/query \
-  -H "X-Tenant-ID: 0" \
-  -H "Content-Type: application/json" \
-  -d '{"query": "signal=spans | where tenant_id == 0 | limit 10"}'
 ```
 
 ## Common Tasks
@@ -127,11 +140,14 @@ curl -X POST http://localhost:8080/query \
 ### Start Everything
 
 ```bash
-# Full setup
+# Full setup (recommended for first time)
 ./scripts/setup-all.sh
 
+# Or start just infrastructure
+podman compose up -d
+
 # Start OTEL-OQL service
-./otel-oql --test-mode --pinot-url=http://localhost:9000
+./otel-oql --test-mode
 ```
 
 ### Check Status
@@ -140,33 +156,44 @@ curl -X POST http://localhost:8080/query \
 ./scripts/verify-setup.sh
 ```
 
-### View Pinot UI
+### View UIs
 
 ```bash
+# Pinot Query Console
 open http://localhost:9000
+
+# Pinot Controller
+open http://localhost:8099
 ```
 
-### Stop Pinot
+### Stop Infrastructure
 
 ```bash
-podman stop pinot-quickstart
+podman compose down
 ```
 
-### Restart Pinot
+### Restart Infrastructure
 
 ```bash
-podman start pinot-quickstart
+podman compose restart
+```
 
-# Wait for it to be ready
-sleep 10
+### View Logs
+
+```bash
+# All services
+podman compose logs -f
+
+# Specific service
+podman compose logs -f kafka
+podman compose logs -f pinot
 ```
 
 ### Delete Everything and Start Fresh
 
 ```bash
-# Stop and remove Pinot container
-podman stop pinot-quickstart
-podman rm pinot-quickstart
+# Stop and remove all containers and volumes
+podman compose down -v
 
 # Re-run setup
 ./scripts/setup-all.sh
@@ -181,17 +208,39 @@ Make sure scripts are executable:
 chmod +x scripts/*.sh
 ```
 
-### Pinot Won't Start
+### Podman Compose Not Found
 
-Check Podman:
+Install podman-compose:
 ```bash
-podman info
-podman ps -a
+# With pip
+pip3 install podman-compose
+
+# With Homebrew (macOS)
+brew install podman-compose
 ```
 
-View Pinot logs:
+### Infrastructure Won't Start
+
+Check Podman is running:
 ```bash
-podman logs pinot-quickstart
+podman info
+```
+
+View all containers:
+```bash
+podman compose ps
+```
+
+View service logs:
+```bash
+podman compose logs kafka
+podman compose logs pinot
+```
+
+Restart everything:
+```bash
+podman compose down
+podman compose up -d
 ```
 
 ### Schema Creation Fails
@@ -215,11 +264,25 @@ curl -X DELETE http://localhost:9000/tables/otel_spans
 
 Check what's using the ports:
 ```bash
+lsof -i :9092   # Kafka
 lsof -i :9000   # Pinot Broker
 lsof -i :8099   # Pinot Controller
 lsof -i :4317   # OTLP gRPC
 lsof -i :4318   # OTLP HTTP
 lsof -i :8080   # Query API
+```
+
+### Kafka Connection Issues
+
+Check Kafka is healthy:
+```bash
+podman compose logs kafka
+nc -z localhost 9092
+```
+
+Restart Kafka:
+```bash
+podman compose restart kafka
 ```
 
 ## Environment Variables
@@ -236,10 +299,19 @@ export TEST_MODE=true
 
 ## Dependencies
 
-- **Podman** - For running Pinot
+- **Podman** - Container runtime
+- **podman-compose** - For managing multi-container setup
+  ```bash
+  # Install with pip
+  pip3 install podman-compose
+
+  # Or with Homebrew (macOS)
+  brew install podman-compose
+  ```
 - **curl** - For health checks and API calls
 - **Go 1.21+** - For building OTEL-OQL
-- **lsof** - For port checking (optional)
+- **nc** (netcat) - For port checking
+- **lsof** - For service verification (optional)
 
 ## See Also
 

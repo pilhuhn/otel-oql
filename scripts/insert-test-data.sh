@@ -6,7 +6,8 @@ echo ""
 # Check if OTEL-OQL service is running
 if ! lsof -i :4318 > /dev/null 2>&1; then
     echo "❌ OTEL-OQL service is not running on port 4318"
-    echo "Start it with: ./otel-oql --test-mode --pinot-url=http://localhost:9000"
+    echo "Start it with: ./otel-oql --test-mode"
+    echo "           or: ./otel-oql --config=otel-oql.yaml"
     exit 1
 fi
 

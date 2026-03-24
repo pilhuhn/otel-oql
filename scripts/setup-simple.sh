@@ -14,7 +14,7 @@ echo ""
 
 # Step 2: Start infrastructure
 echo "🐳 Step 2: Starting Kafka and Pinot..."
-podman compose -f compose-simple.yaml up -d
+podman compose -f compose.yaml up -d
 echo ""
 
 # Step 3: Wait for services

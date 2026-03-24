@@ -1,5 +1,6 @@
 # Binaries
 otel-oql
+oql-cli
 *.exe
 *.dll
 *.so
@@ -7,6 +8,9 @@ otel-oql
 
 # Test binary, built with `go test -c`
 *.test
+
+# Data directory
+data/
 
 # Output of the go coverage tool
 *.out
@@ -26,3 +30,4 @@ go.work
 
 # OS
 .DS_Store
+/otel-oql.log

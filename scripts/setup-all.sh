@@ -5,39 +5,55 @@ echo "🚀 OTEL-OQL Complete Setup"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo ""
 
-# Step 1: Build OTEL-OQL
-echo "📦 Step 1: Building OTEL-OQL..."
+# Check for podman compose
+if ! podman compose version > /dev/null 2>&1; then
+    echo "❌ podman-compose not found"
+    echo "Install with: pip3 install podman-compose"
+    echo "Or use: brew install podman-compose"
+    exit 1
+fi
+
+# Step 1: Build OTEL-OQL and CLI
+echo "📦 Step 1: Building OTEL-OQL and CLI..."
 go build -o otel-oql ./cmd/otel-oql
+go build -o oql-cli ./cmd/oql-cli
 echo "✅ Build complete"
 echo ""
 
-# Step 2: Start Pulsar
-echo "🐳 Step 2: Starting Pulsar..."
-./scripts/start-pulsar.sh
+# Step 2: Start infrastructure with compose
+echo "🐳 Step 2: Starting Kafka and Pinot with compose..."
+podman compose up -d
+echo "⏳ Waiting for services to be healthy (30 seconds)..."
+sleep 30
 echo ""
 
-# Step 3: Start Pinot
-echo "🐳 Step 3: Starting Pinot..."
-./scripts/start-pinot.sh
-echo ""
-
-# Step 4: Initialize schemas
-echo "📊 Step 4: Creating Pinot schemas..."
+# Step 3: Initialize schemas
+echo "📊 Step 3: Creating Pinot schemas..."
 ./otel-oql setup-schema --pinot-url=http://localhost:9000
 echo "✅ Schemas created"
 echo ""
 
-# Step 5: Verify setup
-echo "🔍 Step 5: Verifying setup..."
+# Step 4: Verify setup
+echo "🔍 Step 4: Verifying setup..."
 ./scripts/verify-setup.sh
 echo ""
 
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo "🎉 Setup complete!"
 echo ""
-echo "Start the service with:"
-echo "  ./otel-oql --test-mode --pinot-url=http://localhost:9000 --pulsar-url=pulsar://localhost:6650"
+echo "Infrastructure running (podman compose):"
+echo "  • Kafka:  localhost:9092"
+echo "  • Pinot:  localhost:9000"
 echo ""
-echo "Or in production mode (requires tenant-id):"
-echo "  ./otel-oql --pinot-url=http://localhost:9000 --pulsar-url=pulsar://localhost:6650"
+echo "Start the service with:"
+echo "  ./otel-oql --test-mode"
+echo ""
+echo "Or use the config file:"
+echo "  ./otel-oql --config=otel-oql.yaml"
+echo ""
+echo "Query the service with the CLI:"
+echo "  ./oql-cli --tenant-id=0 \"signal=spans limit 10\""
+echo ""
+echo "Stop infrastructure:"
+echo "  podman compose down"
 echo ""
