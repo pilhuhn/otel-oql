@@ -78,32 +78,15 @@ func main() {
 	if flag.NArg() > 0 {
 		// Query provided as command line arguments
 		query = strings.Join(flag.Args(), " ")
+
+		// Check for help command
+		if strings.ToLower(strings.TrimSpace(query)) == "help" {
+			showHelp()
+			os.Exit(0)
+		}
 	} else {
-		// Read from stdin
-		scanner := bufio.NewScanner(os.Stdin)
-		var lines []string
-
-		// Check if stdin is a terminal (interactive) or pipe
-		stat, _ := os.Stdin.Stat()
-		isInteractive := (stat.Mode() & os.ModeCharDevice) != 0
-
-		if isInteractive {
-			fmt.Fprintf(os.Stderr, "Enter OQL query (Ctrl+D to submit):\n> ")
-		}
-
-		for scanner.Scan() {
-			lines = append(lines, scanner.Text())
-			if isInteractive {
-				fmt.Fprintf(os.Stderr, "> ")
-			}
-		}
-
-		if err := scanner.Err(); err != nil {
-			fmt.Fprintf(os.Stderr, "Error reading input: %v\n", err)
-			os.Exit(1)
-		}
-
-		query = strings.Join(lines, " ")
+		// Read from stdin (interactive mode)
+		query = readQueryInteractive()
 	}
 
 	query = strings.TrimSpace(query)
@@ -139,6 +122,137 @@ func main() {
 		// Pretty-printed table output
 		printResults(resp, *verbose)
 	}
+}
+
+// readQueryInteractive reads a query from stdin, handling help command
+func readQueryInteractive() string {
+	// Check if stdin is a terminal (interactive) or pipe
+	stat, _ := os.Stdin.Stat()
+	isInteractive := (stat.Mode() & os.ModeCharDevice) != 0
+
+	scanner := bufio.NewScanner(os.Stdin)
+
+	for {
+		if isInteractive {
+			fmt.Fprintf(os.Stderr, "Enter OQL query (or 'help' for examples, Ctrl+D to exit):\n> ")
+		}
+
+		// For interactive: read until Ctrl+D
+		// For piped: read one line at a time
+		var lines []string
+
+		if !isInteractive {
+			// Piped input: read one line, check for help, process immediately
+			if scanner.Scan() {
+				line := strings.TrimSpace(scanner.Text())
+				if strings.ToLower(line) == "help" {
+					showHelp()
+					// Continue to next line
+					continue
+				}
+				return line
+			}
+			// EOF or error
+			if err := scanner.Err(); err != nil {
+				fmt.Fprintf(os.Stderr, "Error reading input: %v\n", err)
+				os.Exit(1)
+			}
+			return "" // EOF
+		}
+
+		// Interactive mode: read multiple lines until Ctrl+D
+		for scanner.Scan() {
+			lines = append(lines, scanner.Text())
+			fmt.Fprintf(os.Stderr, "> ")
+		}
+
+		if err := scanner.Err(); err != nil {
+			fmt.Fprintf(os.Stderr, "Error reading input: %v\n", err)
+			os.Exit(1)
+		}
+
+		query := strings.Join(lines, " ")
+		query = strings.TrimSpace(query)
+
+		// Check for help command in interactive mode
+		if strings.ToLower(query) == "help" {
+			showHelp()
+			scanner = bufio.NewScanner(os.Stdin)
+			continue
+		}
+
+		return query
+	}
+}
+
+// showHelp displays OQL syntax help and examples
+func showHelp() {
+	help := `
+OQL (Observability Query Language) Help
+======================================
+
+BASIC SYNTAX:
+  signal=<type> [operations...]
+
+SIGNAL TYPES:
+  - spans, span, s, traces, trace, t   (trace data)
+  - metrics, metric, m                 (metrics data)
+  - logs, log, l                       (log data)
+
+COMMON OPERATIONS:
+  where <condition>              Filter by condition
+  limit <n>                      Limit results to n rows
+  expand trace                   Get all spans in the same trace
+  correlate <signals>            Find related logs/metrics/spans
+  get_exemplars()                Extract trace IDs from metrics
+  since <duration>               Time range (e.g., "1h", "30m")
+  aggregate <func>(<field>)      Aggregations (avg, min, max, sum, count)
+  group by <fields>              Group results
+
+CONDITIONS:
+  field == "value"               String equality (use == not =)
+  field == 123                   Number equality
+  field > 100                    Numeric comparison (>, <, >=, <=, !=)
+  cond1 and cond2                Logical AND
+  cond1 or cond2                 Logical OR
+
+COMMON FIELDS:
+  Spans:    trace_id, span_id, name, service_name, duration,
+            http_method, http_status_code, error, status_code
+  Metrics:  metric_name, value, service_name, timestamp
+  Logs:     body, severity_text, service_name, trace_id
+
+EXAMPLES:
+
+  # Find slow spans
+  signal=spans where duration > 1000000000 limit 10
+
+  # Find errors from a service
+  signal=spans where service_name == "payment" and error == true limit 5
+
+  # Get full trace for a slow request
+  signal=spans where duration > 5000000000 limit 1 | expand trace
+
+  # Find logs correlated with error spans
+  signal=spans where error == true limit 10 | correlate logs
+
+  # Recent errors (last hour)
+  signal=spans where error == true since 1h limit 20
+
+  # Metrics over time
+  signal=metrics where metric_name == "http.server.duration" since 30m
+
+  # Aggregate query
+  signal=spans group by service_name | aggregate avg(duration)
+
+TIPS:
+  - Use == for equality (not =)
+  - Strings need quotes: service_name == "payment"
+  - Numbers don't: duration > 1000
+  - Duration is in nanoseconds (1s = 1000000000ns)
+  - Press Ctrl+D to exit
+`
+	fmt.Println(help)
 }
 
 // executeQueryWithRetry executes a query and offers suggestions on errors
