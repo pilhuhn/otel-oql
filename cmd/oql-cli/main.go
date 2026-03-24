@@ -130,6 +130,16 @@ func runInteractiveMode(endpoint, tenantID string, verbose, jsonOutput bool) {
 		query := input
 		isRefinement := isRefinementOperation(input)
 
+		// Also check if it's a bare condition (auto-add filter)
+		if !isRefinement && !strings.HasPrefix(strings.ToLower(input), "signal=") {
+			if looksLikeCondition(input) {
+				// Auto-add filter prefix
+				input = "filter " + input
+				isRefinement = true
+				fmt.Fprintf(os.Stderr, "(auto-adding 'filter' prefix)\n")
+			}
+		}
+
 		if isRefinement {
 			if lastSuccessfulQuery == "" {
 				fmt.Fprintf(os.Stderr, "Error: No previous query to refine. Start with a signal= query first.\n\n")
@@ -137,7 +147,7 @@ func runInteractiveMode(endpoint, tenantID string, verbose, jsonOutput bool) {
 			}
 			// Append refinement to last query
 			query = lastSuccessfulQuery + " | " + input
-			fmt.Fprintf(os.Stderr, "Refining previous query: %s\n", query)
+			fmt.Fprintf(os.Stderr, "→ %s\n", query)
 		}
 
 		// Execute query with retry on error
@@ -209,6 +219,23 @@ func isRefinementOperation(input string) bool {
 
 	for _, op := range refinementOps {
 		if strings.HasPrefix(lowerInput, op) {
+			return true
+		}
+	}
+
+	return false
+}
+
+// looksLikeCondition checks if input looks like a bare condition
+// (has comparison operators but no keyword prefix)
+func looksLikeCondition(input string) bool {
+	trimmed := strings.TrimSpace(input)
+
+	// Check for common operators
+	operators := []string{"==", "!=", ">=", "<=", ">", "<", "=", " and ", " or "}
+
+	for _, op := range operators {
+		if strings.Contains(trimmed, op) {
 			return true
 		}
 	}
