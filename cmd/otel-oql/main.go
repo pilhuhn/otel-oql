@@ -11,6 +11,7 @@ import (
 	"github.com/pilhuhn/otel-oql/internal/config"
 	"github.com/pilhuhn/otel-oql/pkg/api"
 	"github.com/pilhuhn/otel-oql/pkg/ingestion"
+	"github.com/pilhuhn/otel-oql/pkg/mcp"
 	"github.com/pilhuhn/otel-oql/pkg/observability"
 	"github.com/pilhuhn/otel-oql/pkg/pinot"
 	"github.com/pilhuhn/otel-oql/pkg/receiver"
@@ -56,6 +57,7 @@ func run() error {
 	fmt.Printf("OTLP gRPC Port: %d\n", cfg.OTLPGRPCPort)
 	fmt.Printf("OTLP HTTP Port: %d\n", cfg.OTLPHTTPPort)
 	fmt.Printf("Query API Port: %d\n", cfg.QueryAPIPort)
+	fmt.Printf("MCP Port: %d\n", cfg.MCPPort)
 	fmt.Printf("Test Mode: %v\n", cfg.TestMode)
 	fmt.Printf("Observability: %v\n", cfg.ObservabilityEnabled)
 	if cfg.ObservabilityEnabled {
@@ -98,6 +100,9 @@ func run() error {
 	// Initialize query API server
 	queryServer := api.NewServer(cfg.QueryAPIPort, validator, pinotClient, obs)
 
+	// Initialize MCP server
+	mcpServer := mcp.NewServer(cfg.MCPPort, pinotClient)
+
 	// Start receivers
 	if err := grpcReceiver.Start(ctx); err != nil {
 		return fmt.Errorf("failed to start gRPC receiver: %w", err)
@@ -110,6 +115,11 @@ func run() error {
 	// Start query API server
 	if err := queryServer.Start(ctx); err != nil {
 		return fmt.Errorf("failed to start query API server: %w", err)
+	}
+
+	// Start MCP server
+	if err := mcpServer.Start(ctx); err != nil {
+		return fmt.Errorf("failed to start MCP server: %w", err)
 	}
 
 	fmt.Println("OTEL-OQL service started successfully")
@@ -132,6 +142,10 @@ func run() error {
 
 	if err := queryServer.Stop(ctx); err != nil {
 		fmt.Printf("Error stopping query API server: %v\n", err)
+	}
+
+	if err := mcpServer.Stop(ctx); err != nil {
+		fmt.Printf("Error stopping MCP server: %v\n", err)
 	}
 
 	// Close Pulsar connections

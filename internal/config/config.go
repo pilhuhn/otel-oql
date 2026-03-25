@@ -28,6 +28,9 @@ type Config struct {
 	// Query API
 	QueryAPIPort int `yaml:"query_api_port"`
 
+	// MCP Server
+	MCPPort int `yaml:"mcp_port"`
+
 	// Observability (self-instrumentation)
 	ObservabilityEnabled  bool   `yaml:"observability_enabled"`  // Enable self-observability
 	ObservabilityEndpoint string `yaml:"observability_endpoint"` // OTLP gRPC endpoint (default: localhost:4317)
@@ -49,6 +52,7 @@ func Load() (*Config, error) {
 	var otlpGRPCPort int
 	var otlpHTTPPort int
 	var queryAPIPort int
+	var mcpPort int
 	var testMode bool
 	var obsEnabled bool
 	var obsEndpoint string
@@ -60,6 +64,7 @@ func Load() (*Config, error) {
 	flag.IntVar(&otlpHTTPPort, "otlp-http-port", 0, "OTLP HTTP receiver port")
 	flag.BoolVar(&testMode, "test-mode", false, "Enable test mode (default tenant-id=0)")
 	flag.IntVar(&queryAPIPort, "query-api-port", 0, "Query API server port")
+	flag.IntVar(&mcpPort, "mcp-port", 0, "MCP server port")
 	flag.BoolVar(&obsEnabled, "observability-enabled", false, "Enable self-observability")
 	flag.StringVar(&obsEndpoint, "observability-endpoint", "", "OTLP endpoint for self-observability")
 	flag.StringVar(&obsTenantID, "observability-tenant-id", "", "Tenant ID for self-observability")
@@ -91,6 +96,11 @@ func Load() (*Config, error) {
 	if env := os.Getenv("QUERY_API_PORT"); env != "" {
 		if val, err := strconv.Atoi(env); err == nil {
 			cfg.QueryAPIPort = val
+		}
+	}
+	if env := os.Getenv("MCP_PORT"); env != "" {
+		if val, err := strconv.Atoi(env); err == nil {
+			cfg.MCPPort = val
 		}
 	}
 	if env := os.Getenv("TEST_MODE"); env != "" {
@@ -126,6 +136,9 @@ func Load() (*Config, error) {
 	if queryAPIPort != 0 {
 		cfg.QueryAPIPort = queryAPIPort
 	}
+	if mcpPort != 0 {
+		cfg.MCPPort = mcpPort
+	}
 	// testMode from flags is handled specially since false is the default
 	if flag.Lookup("test-mode").Value.String() == "true" {
 		cfg.TestMode = true
@@ -156,6 +169,9 @@ func Load() (*Config, error) {
 	}
 	if cfg.QueryAPIPort == 0 {
 		cfg.QueryAPIPort = 8080
+	}
+	if cfg.MCPPort == 0 {
+		cfg.MCPPort = 8090
 	}
 	// Observability defaults
 	if cfg.ObservabilityEndpoint == "" {
@@ -188,6 +204,10 @@ func Load() (*Config, error) {
 
 	if cfg.QueryAPIPort <= 0 || cfg.QueryAPIPort > 65535 {
 		return nil, fmt.Errorf("invalid query-api-port: %d", cfg.QueryAPIPort)
+	}
+
+	if cfg.MCPPort <= 0 || cfg.MCPPort > 65535 {
+		return nil, fmt.Errorf("invalid mcp-port: %d", cfg.MCPPort)
 	}
 
 	return cfg, nil

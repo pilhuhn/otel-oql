@@ -1,14 +1,20 @@
 # OTEL-OQL Implementation Checkpoint
 
-**Date**: March 23, 2026
+**Date**: March 25, 2026
 **Status**: ✅ Fully Operational - End-to-End Working
-**Last Updated**: March 23, 2026 (Production Setup Complete)
+**Last Updated**: March 25, 2026 (MCP Server + Enhanced Error Handling)
 
 ## Summary
 
 Successfully implemented a complete multi-tenant OpenTelemetry data ingestion and query service with OQL (Observability Query Language) support, backed by Apache Pinot with Kafka streaming. The service is now fully operational end-to-end with data flowing from OTLP ingestion → Kafka → Pinot → OQL queries.
 
-**Latest Major Updates** (March 23, 2026):
+**Latest Major Updates** (March 25, 2026):
+- ✅ **MCP Server** - HTTP-based Model Context Protocol server for AI tool integration (port 8090)
+- ✅ **Enhanced Error Handling** - Malformed duration detection with clear error messages
+- ✅ **Time Unit Parsing** - Backend parser handles ns, us, ms, s, m, h with float support
+- ✅ **MCP Integration Tests** - 9 comprehensive tests for MCP endpoints
+
+**Previous Updates** (March 23, 2026):
 - ✅ **End-to-End Working** - Complete data flow verified: OTLP → Kafka → Pinot → OQL queries
 - ✅ **Simplified Setup** - `compose-simple.yaml` with minimal dependencies (Kafka + Pinot only)
 - ✅ **Setup Script** - `scripts/setup-simple.sh` automates full environment setup
@@ -50,8 +56,14 @@ Successfully implemented a complete multi-tenant OpenTelemetry data ingestion an
 - **Port Separation**: Controller (9000) vs Broker (8000)
 
 ### ✅ Query Engine
-- **OQL Parser**: Complete syntax support with unit tests
+- **OQL Parser**: Complete syntax support with comprehensive unit tests
 - **Flexible Syntax**: Pipes (`|`) are completely optional - queries work with or without them
+- **Enhanced Error Handling** (NEW - March 25, 2026):
+  - Early detection of malformed durations (e.g., "5.5.5s", "1.2.3ms")
+  - Clear error messages instead of cryptic Pinot SQL errors
+  - False positive prevention (e.g., "status" not treated as duration)
+  - Parse error markers propagated through AST to translator
+- **Time Unit Parsing**: Backend parser handles ns, us, ms, s, m, h with float support (e.g., "1.5s")
 - **SQL Translator**: OQL to Pinot SQL with tenant isolation and operator conversion
 - **Query API**: HTTP endpoint (port 8080) with JSON interface
 - **Operator Fix**: Properly converts `==` to `=` for SQL
@@ -132,7 +144,7 @@ Successfully implemented a complete multi-tenant OpenTelemetry data ingestion an
   - `otel_oql.errors.total` - Error counter by type and component
   - `otel_oql.kafka.published.total` - Messages published to Kafka
 
-### ✅ CLI Query Tool (NEW)
+### ✅ CLI Query Tool
 - **Command-Line Client**: `oql-cli` - Interactive OQL query tool
 - **Multiple Input Modes**:
   - Direct query as command argument: `oql-cli "signal=spans limit 10"`
@@ -149,6 +161,28 @@ Successfully implemented a complete multi-tenant OpenTelemetry data ingestion an
   - `--json`: Output raw JSON
 - **Scripting-Friendly**: Easy integration with shell scripts and pipelines
 - **Documentation**: Complete README with examples in cmd/oql-cli/
+
+### ✅ MCP Server (NEW - March 25, 2026)
+- **Model Context Protocol**: HTTP-based MCP server for AI tool integration
+- **Port**: 8090 (configurable via `--mcp-port` or `MCP_PORT`)
+- **MCP Tools**:
+  - `oql_query`: Execute OQL queries with tenant_id and query parameters
+  - `oql_help`: Get OQL documentation with topic filtering (operators, examples, syntax, signals, all)
+- **HTTP Endpoints**:
+  - `GET/POST /mcp/v1/tools/list` - List available tools with schemas
+  - `POST /mcp/v1/tools/call` - Execute a tool
+- **Features**:
+  - CORS support for browser-based MCP clients
+  - Proper error handling with structured error codes (parse_error, translation_error, invalid_argument, tool_not_found, file_error, invalid_request, query_error)
+  - Topic-based help documentation filtering
+  - Integration with existing OQL parser and Pinot translator
+  - Mock-based testing with httptest (no external dependencies)
+- **Integration Tests**: 9 comprehensive tests covering all endpoints and error cases
+- **Use Cases**:
+  - AI assistants querying observability data via natural language
+  - Automated debugging workflows
+  - Interactive documentation access
+  - Programmatic OQL query execution
 
 ### ✅ Operations & Debugging
 - **Debug Logging**: Throughout main, receivers, and ingester
@@ -178,17 +212,20 @@ otel-oql/
 │   ├── ingestion/             # Data ingestion pipeline
 │   │   ├── ingester.go        # Kafka producer integration + observability (UPDATED)
 │   │   └── attributes.go      # Attribute extraction helpers
-│   ├── integration/           # Integration tests (NEW)
+│   ├── integration/           # Integration tests
 │   │   ├── integration_test.go
 │   │   ├── e2e_test.go        # Core E2E tests (8 tests)
-│   │   ├── new_operations_test.go  # New OQL operations tests (15 tests) (NEW)
+│   │   ├── new_operations_test.go  # New OQL operations tests (15 tests)
 │   │   └── helpers_test.go
-│   ├── observability/         # Self-instrumentation (NEW)
+│   ├── mcp/                   # MCP server (NEW - March 25, 2026)
+│   │   ├── server.go          # HTTP-based Model Context Protocol server
+│   │   └── server_test.go     # MCP integration tests (9 tests)
+│   ├── observability/         # Self-instrumentation
 │   │   └── observability.go   # OpenTelemetry setup with traces & metrics
 │   ├── oql/                   # OQL parser
 │   │   ├── ast.go
-│   │   ├── parser.go
-│   │   └── parser_test.go     # Unit tests (NEW)
+│   │   ├── parser.go          # Enhanced error handling (UPDATED)
+│   │   └── parser_test.go     # Unit tests including duration parsing (UPDATED)
 │   ├── pinot/                 # Pinot client
 │   │   ├── client.go
 │   │   └── schema.go          # REALTIME table configs (UPDATED)
@@ -222,6 +259,9 @@ otel-oql/
 ## Git History
 
 ```
+[pending] - Add MCP server with HTTP-based protocol and comprehensive tests
+e9d70b2 - Improve error handling for invalid duration formats
+d2c63c9 - Move time unit parsing from CLI to backend with unit tests
 f7f407f - Add comprehensive integration tests for all new OQL operations
 c0c1c90 - Update checkpoint with complete OQL implementation details
 0c52b22 - Fully implement correlate, extract, switch_context, filter operations plus add aggregation and time functions
@@ -238,7 +278,18 @@ f94988c - Update checkpoint with schema fix details
 
 ## Testing Status
 
-### ✅ Integration Tests (23/23 Passing - 100%)
+### ✅ Integration Tests (32/32 Passing - 100%)
+
+**MCP Server Tests (9 tests):** (NEW - March 25, 2026)
+1. ✅ TestMCP_ListTools - Tool listing with schemas
+2. ✅ TestMCP_OQLQuery_Success - Successful query execution
+3. ✅ TestMCP_OQLQuery_ParseError - Parse error handling
+4. ✅ TestMCP_OQLQuery_MalformedDuration - Invalid duration detection
+5. ✅ TestMCP_OQLQuery_MissingTenantID - Missing parameter validation
+6. ✅ TestMCP_OQLQuery_MissingQuery - Missing query validation
+7. ✅ TestMCP_UnknownTool - Unknown tool error handling
+8. ✅ TestMCP_InvalidJSON - Invalid JSON handling
+9. ✅ TestMCP_CORS - CORS headers verification
 
 **Core E2E Tests (8 tests):**
 1. ✅ TestSpanIngestionAndQuery - Full span pipeline working
@@ -354,6 +405,7 @@ GROUP BY service_name
 - `OTLP_GRPC_PORT` - gRPC receiver port (default: 4317)
 - `OTLP_HTTP_PORT` - HTTP receiver port (default: 4318)
 - `QUERY_API_PORT` - Query API port (default: 8080)
+- `MCP_PORT` - MCP server port (default: 8090) (NEW)
 - `TEST_MODE` - Enable test mode (default: false)
 - `OBSERVABILITY_ENABLED` - Enable self-observability (default: false)
 - `OBSERVABILITY_ENDPOINT` - OTLP endpoint for self-observability (default: localhost:4317)
@@ -409,6 +461,15 @@ curl -X POST http://localhost:8080/query \
 
 # Query self-observability data (if observability enabled)
 ./oql-cli --tenant-id=0 "signal=spans where service_name == \"otel-oql\" since 5m"
+
+# Query via MCP server (NEW)
+curl http://localhost:8090/mcp/v1/tools/list | jq '.'
+curl -X POST http://localhost:8090/mcp/v1/tools/call \
+  -H "Content-Type: application/json" \
+  -d '{"name":"oql_query","arguments":{"tenant_id":0,"query":"signal=spans | limit 5"}}'
+curl -X POST http://localhost:8090/mcp/v1/tools/call \
+  -H "Content-Type: application/json" \
+  -d '{"name":"oql_help","arguments":{"topic":"operators"}}'
 ```
 
 ### Run Integration Tests
@@ -585,9 +646,11 @@ All dependencies use Apache 2.0 license as required:
 
 ---
 
-**Checkpoint created**: March 23, 2026
-**Test Status**: ✅ 100% Pass Rate (23/23 tests passing - 8 E2E + 15 OQL operations)
+**Checkpoint created**: March 25, 2026
+**Test Status**: ✅ 100% Pass Rate (32/32 tests passing - 8 E2E + 15 OQL operations + 9 MCP)
 **OQL Implementation**: ✅ Complete - All operations fully functional with tests
+**Error Handling**: ✅ Enhanced - Malformed duration detection with clear error messages
+**MCP Server**: ✅ Complete - HTTP-based Model Context Protocol for AI tool integration
 **Observability**: ✅ Complete - Full OpenTelemetry instrumentation with traces and metrics
 **CLI Tool**: ✅ Complete - Interactive command-line query client (oql-cli)
 **Next session should focus on**: Performance testing, production hardening, health check endpoints
