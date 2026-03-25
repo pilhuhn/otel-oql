@@ -11,6 +11,7 @@ import (
 	"github.com/pilhuhn/otel-oql/pkg/observability"
 	"github.com/pilhuhn/otel-oql/pkg/oql"
 	"github.com/pilhuhn/otel-oql/pkg/pinot"
+	"github.com/pilhuhn/otel-oql/pkg/sqlutil"
 	"github.com/pilhuhn/otel-oql/pkg/tenant"
 	"github.com/pilhuhn/otel-oql/pkg/translator"
 )
@@ -308,7 +309,7 @@ func (s *Server) executeExpandQuery(ctx context.Context, sql string, tenantID in
 	// Step 3: Build IN clause with trace_ids
 	traceIDs := make([]string, 0, len(traceIDSet))
 	for traceID := range traceIDSet {
-		traceIDs = append(traceIDs, fmt.Sprintf("'%s'", traceID))
+		traceIDs = append(traceIDs, sqlutil.StringLiteral(traceID))
 	}
 
 	expandSQL := fmt.Sprintf(
@@ -450,7 +451,7 @@ func (s *Server) executeCorrelateQuery(ctx context.Context, sql string, tenantID
 	// Build IN clause with trace_ids
 	traceIDs := make([]string, 0, len(traceIDSet))
 	for traceID := range traceIDSet {
-		traceIDs = append(traceIDs, fmt.Sprintf("'%s'", traceID))
+		traceIDs = append(traceIDs, sqlutil.StringLiteral(traceID))
 	}
 	traceIDsIN := join(traceIDs, ", ")
 

@@ -3,6 +3,7 @@ package integration
 import (
 	"context"
 	"encoding/json"
+	"flag"
 	"fmt"
 	"net/http"
 	"os"
@@ -13,15 +14,24 @@ import (
 
 // TestMain handles setup and teardown for integration tests
 func TestMain(m *testing.M) {
-	// Parse flags first
-	// (testing.Short() requires flags to be parsed)
+	flag.Parse()
+	if testing.Short() {
+		fmt.Println("⚠️  skip integration tests: -short")
+		os.Exit(0)
+	}
 
 	// Check if Pinot is running
 	if !isPinotAvailable() {
-		fmt.Println("❌ Pinot is not running or not accessible at " + pinotBrokerURL)
-		fmt.Println("Start Pinot with: docker-compose up -d")
-		fmt.Println("Then ensure schemas are created: ./otel-oql setup-schema --pinot-url=" + pinotControllerURL)
-		os.Exit(1)
+		if os.Getenv("REQUIRE_INTEGRATION") == "1" {
+			fmt.Println("❌ Pinot is not running or not accessible at " + pinotBrokerURL)
+			fmt.Println("Start Pinot with: docker-compose up -d")
+			fmt.Println("Then ensure schemas are created: ./otel-oql setup-schema --pinot-url=" + pinotControllerURL)
+			os.Exit(1)
+		}
+		fmt.Println("⚠️  skip integration tests: Pinot not reachable at " + pinotBrokerURL)
+		fmt.Println("Start Pinot with: docker-compose up -d, then: go test ./pkg/integration/... -count=1")
+		fmt.Println("Or set REQUIRE_INTEGRATION=1 to fail when Pinot is down (e.g. CI with Pinot).")
+		os.Exit(0)
 	}
 
 	fmt.Println("✅ Pinot is running and accessible")

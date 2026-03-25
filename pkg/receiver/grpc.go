@@ -108,7 +108,7 @@ func (h *traceHandler) Export(ctx context.Context, req ptraceotlp.ExportRequest)
 			}
 		}
 	}
-	fmt.Println("=====================================================\n")
+	fmt.Println("=====================================================")
 
 	// Get tenant ID from context
 	tenantID, ok := tenant.FromContext(ctx)
@@ -176,7 +176,7 @@ func (h *metricHandler) Export(ctx context.Context, req pmetricotlp.ExportReques
 			}
 		}
 	}
-	fmt.Println("=====================================================\n")
+	fmt.Println("=====================================================")
 
 	// Get tenant ID from context
 	tenantID, ok := tenant.FromContext(ctx)
@@ -233,7 +233,7 @@ func (h *logHandler) Export(ctx context.Context, req plogotlp.ExportRequest) (pl
 			}
 		}
 	}
-	fmt.Println("=====================================================\n")
+	fmt.Println("=====================================================")
 
 	// Get tenant ID from context
 	tenantID, ok := tenant.FromContext(ctx)

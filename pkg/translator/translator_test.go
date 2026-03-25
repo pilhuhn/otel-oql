@@ -150,7 +150,7 @@ func TestTranslator_WhereWithNativeColumn(t *testing.T) {
 	require.Len(t, sqls, 1)
 
 	// Should use native column, not JSON extraction
-	assert.Contains(t, sqls[0], "http_status_code == 500")
+	assert.Contains(t, sqls[0], "http_status_code = 500")
 	assert.NotContains(t, sqls[0], "JSON_EXTRACT")
 }
 
@@ -175,7 +175,7 @@ func TestTranslator_WhereWithJSONExtraction(t *testing.T) {
 
 	// Should use JSON extraction for non-native attributes
 	assert.Contains(t, sqls[0], "JSON_EXTRACT_SCALAR(attributes, '$.custom_field', 'STRING')")
-	assert.Contains(t, sqls[0], "== 'value'")
+	assert.Contains(t, sqls[0], "= 'value'")
 }
 
 func TestTranslator_WhereWithResourceAttributes(t *testing.T) {
@@ -198,7 +198,7 @@ func TestTranslator_WhereWithResourceAttributes(t *testing.T) {
 	require.Len(t, sqls, 1)
 
 	// service.name is a native column
-	assert.Contains(t, sqls[0], "service_name == 'my-service'")
+	assert.Contains(t, sqls[0], "service_name = 'my-service'")
 }
 
 func TestTranslator_WhereWithNonDottedField(t *testing.T) {
@@ -221,7 +221,7 @@ func TestTranslator_WhereWithNonDottedField(t *testing.T) {
 	require.Len(t, sqls, 1)
 
 	// Should use field name directly
-	assert.Contains(t, sqls[0], "trace_id == 'test-trace-123'")
+	assert.Contains(t, sqls[0], "trace_id = 'test-trace-123'")
 	assert.NotContains(t, sqls[0], "JSON_EXTRACT")
 }
 
@@ -286,8 +286,8 @@ func TestTranslator_OrConditions(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, sqls, 1)
 
-	assert.Contains(t, sqls[0], "severity == 'ERROR'")
-	assert.Contains(t, sqls[0], "severity == 'FATAL'")
+	assert.Contains(t, sqls[0], "severity = 'ERROR'")
+	assert.Contains(t, sqls[0], "severity = 'FATAL'")
 	assert.Contains(t, sqls[0], "OR")
 }
 
@@ -327,9 +327,10 @@ func TestTranslator_ExpandOperation(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, sqls, 1)
 
-	// Should use subquery to get all spans with matching trace_id
-	assert.Contains(t, sqls[0], "trace_id IN")
-	assert.Contains(t, sqls[0], "SELECT DISTINCT trace_id")
+	// Expand is emitted as a marker; API server runs the multi-step trace expansion
+	assert.Contains(t, sqls[0], "__EXPAND_TRACE__")
+	assert.Contains(t, sqls[0], "name = 'parent'")
+	assert.Contains(t, sqls[0], "__TABLE__otel_spans__")
 }
 
 func TestTranslator_CorrelateOperation(t *testing.T) {
@@ -352,19 +353,13 @@ func TestTranslator_CorrelateOperation(t *testing.T) {
 
 	sqls, err := translator.TranslateQuery(query)
 	require.NoError(t, err)
-	require.Len(t, sqls, 3) // Original query + 2 correlated queries
+	require.Len(t, sqls, 1)
 
-	// First query is the original spans query
+	// Correlate is emitted as a marker; API server runs per-signal queries
+	assert.Contains(t, sqls[0], "__CORRELATE__")
 	assert.Contains(t, sqls[0], "otel_spans")
-	assert.Contains(t, sqls[0], "trace_id == 'test-trace'")
-
-	// Second query correlates logs
-	assert.Contains(t, sqls[1], "otel_logs")
-	assert.Contains(t, sqls[1], "trace_id IN")
-
-	// Third query correlates metrics
-	assert.Contains(t, sqls[2], "otel_metrics")
-	assert.Contains(t, sqls[2], "trace_id IN")
+	assert.Contains(t, sqls[0], "trace_id = 'test-trace'")
+	assert.Contains(t, sqls[0], "logs,metrics")
 }
 
 func TestTranslator_GetExemplarsOperation(t *testing.T) {
@@ -459,7 +454,7 @@ func TestTranslator_FilterOperation(t *testing.T) {
 	require.Len(t, sqls, 1)
 
 	// Filter should add another AND clause
-	assert.Contains(t, sqls[0], "tenant_id == 0")
+	assert.Contains(t, sqls[0], "tenant_id = 0")
 	assert.Contains(t, sqls[0], "http_status_code >= 500")
 }
 
@@ -549,9 +544,8 @@ func TestTranslator_ComplexQuery(t *testing.T) {
 	// Verify all parts are present
 	assert.Contains(t, sqls[0], "otel_spans")
 	assert.Contains(t, sqls[0], "tenant_id = 0")
-	assert.Contains(t, sqls[0], "tenant_id == 0")
 	assert.Contains(t, sqls[0], "http_status_code >= 500")
-	assert.Contains(t, sqls[0], "trace_id IN")
+	assert.Contains(t, sqls[0], "__EXPAND_TRACE__")
 	assert.Contains(t, sqls[0], "LIMIT 100")
 }
 
@@ -640,7 +634,54 @@ func TestTranslator_AllOperators(t *testing.T) {
 			require.NoError(t, err)
 			require.Len(t, sqls, 1)
 
-			assert.Contains(t, sqls[0], "duration "+op+" 1000")
+			wantOp := op
+			if op == "==" {
+				wantOp = "="
+			} else if op == "!=" {
+				wantOp = "<>"
+			}
+			assert.Contains(t, sqls[0], "duration "+wantOp+" 1000")
 		})
 	}
+}
+
+func TestTranslator_AttributeKeyWithSingleQuoteEscaped(t *testing.T) {
+	translator := NewTranslator(0)
+	query := &oql.Query{
+		Signal: oql.SignalSpans,
+		Operations: []oql.Operation{
+			&oql.WhereOp{
+				Condition: &oql.BinaryCondition{
+					Left:     "attributes.test'key",
+					Operator: "==",
+					Right:    "v",
+				},
+			},
+		},
+	}
+
+	sqls, err := translator.TranslateQuery(query)
+	require.NoError(t, err)
+	require.Len(t, sqls, 1)
+	assert.Contains(t, sqls[0], "JSON_EXTRACT_SCALAR(attributes, '$.test''key', 'STRING')")
+	assert.Contains(t, sqls[0], "= 'v'")
+}
+
+func TestTranslator_MaliciousFieldExpressionRejected(t *testing.T) {
+	translator := NewTranslator(0)
+	query := &oql.Query{
+		Signal: oql.SignalSpans,
+		Operations: []oql.Operation{
+			&oql.WhereOp{
+				Condition: &oql.BinaryCondition{
+					Left:     "trace_id) OR (1=1",
+					Operator: "==",
+					Right:    "x",
+				},
+			},
+		},
+	}
+
+	_, err := translator.TranslateQuery(query)
+	require.Error(t, err)
 }

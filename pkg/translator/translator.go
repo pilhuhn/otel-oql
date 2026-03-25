@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/pilhuhn/otel-oql/pkg/oql"
+	"github.com/pilhuhn/otel-oql/pkg/sqlutil"
 )
 
 // Translator translates OQL queries to Pinot SQL
@@ -68,8 +69,14 @@ func (t *Translator) TranslateQuery(query *oql.Query) ([]string, error) {
 			sql = fmt.Sprintf("SELECT * FROM %s WHERE tenant_id = %d", newTable, t.tenantID)
 
 		case *oql.ExtractOp:
-			// Extract selects specific fields
-			sql = strings.Replace(sql, "SELECT *", fmt.Sprintf("SELECT %s AS %s", v.Field, v.Alias), 1)
+			fieldSQL, err := t.translateFieldReference(v.Field)
+			if err != nil {
+				return nil, fmt.Errorf("extract: %w", err)
+			}
+			if err := validatePlainIdentifier(v.Alias); err != nil {
+				return nil, fmt.Errorf("extract alias: %w", err)
+			}
+			sql = strings.Replace(sql, "SELECT *", fmt.Sprintf("SELECT %s AS %s", fieldSQL, v.Alias), 1)
 
 		case *oql.FilterOp:
 			// Filter is like where but for refining results
@@ -80,12 +87,21 @@ func (t *Translator) TranslateQuery(query *oql.Query) ([]string, error) {
 			sql += " AND " + filterSQL
 
 		case *oql.GroupByOp:
-			// Group by stores fields for later use by aggregations
-			t.groupByFields = v.Fields
+			t.groupByFields = nil
+			for _, f := range v.Fields {
+				expr, err := t.translateFieldReference(strings.TrimSpace(f))
+				if err != nil {
+					return nil, fmt.Errorf("group by: %w", err)
+				}
+				t.groupByFields = append(t.groupByFields, expr)
+			}
 
 		case *oql.AggregateOp:
-			// Aggregate modifies the SELECT clause
-			sql = t.translateAggregate(sql, v)
+			var err error
+			sql, err = t.translateAggregate(sql, v)
+			if err != nil {
+				return nil, err
+			}
 
 		case *oql.SinceOp:
 			// Since adds time range filter
@@ -142,56 +158,71 @@ func (t *Translator) translateCondition(cond oql.Condition) (string, error) {
 	}
 }
 
-// translateBinaryCondition translates a binary condition
-func (t *Translator) translateBinaryCondition(cond *oql.BinaryCondition) (string, error) {
-	field := cond.Left
-	operator := cond.Operator
-	value := cond.Right
-
-	// Check if field uses dot notation (attributes.field or resource_attributes.field)
+// translateFieldReference maps an OQL field (column or attributes.key) to a Pinot SQL expression.
+func (t *Translator) translateFieldReference(field string) (string, error) {
+	field = strings.TrimSpace(field)
+	if field == "" {
+		return "", fmt.Errorf("empty field")
+	}
 	if strings.Contains(field, ".") {
 		parts := strings.SplitN(field, ".", 2)
-
-		// Check if this is an attribute access
-		if parts[0] == "attributes" || parts[0] == "resource_attributes" {
-			attributeKey := parts[1]
-
-			// Check if this attribute has been extracted to a native column
-			if nativeColumn := t.getNativeColumn(attributeKey); nativeColumn != "" {
-				field = nativeColumn
-			} else {
-				// Use JSON extraction for non-native attributes
-				field = fmt.Sprintf("JSON_EXTRACT_SCALAR(%s, '$.%s', 'STRING')", parts[0], attributeKey)
-			}
+		prefix := parts[0]
+		rest := parts[1]
+		if rest == "" {
+			return "", fmt.Errorf("invalid field: missing name after %q", prefix)
 		}
+		if prefix == "attributes" || prefix == "resource_attributes" {
+			if err := validateAttributeKey(rest); err != nil {
+				return "", err
+			}
+			if nativeColumn := t.getNativeColumn(rest); nativeColumn != "" {
+				return nativeColumn, nil
+			}
+			return fmt.Sprintf("JSON_EXTRACT_SCALAR(%s, %s, 'STRING')", prefix, jsonPathLiteral(rest)), nil
+		}
+		return "", fmt.Errorf("invalid field %q: only attributes.<key> or resource_attributes.<key> may use dot notation", field)
+	}
+	if err := validatePlainIdentifier(field); err != nil {
+		return "", err
+	}
+	return field, nil
+}
+
+// translateBinaryCondition translates a binary condition
+func (t *Translator) translateBinaryCondition(cond *oql.BinaryCondition) (string, error) {
+	fieldSQL, err := t.translateFieldReference(cond.Left)
+	if err != nil {
+		return "", err
 	}
 
-	// Format the value
-	valueStr := t.formatValue(value)
+	valueStr := t.formatValue(cond.Right)
 
 	// Check if there was a parse error
 	if strings.HasPrefix(valueStr, "'PARSE_ERROR:") {
-		// Extract the error message (remove quotes and PARSE_ERROR: prefix)
 		errMsg := strings.TrimPrefix(valueStr, "'PARSE_ERROR: ")
 		errMsg = strings.TrimSuffix(errMsg, "'")
 		return "", fmt.Errorf("%s", errMsg)
 	}
 
-	// Convert OQL operators to SQL operators
-	sqlOperator := t.convertOperator(operator)
+	sqlOperator, err := t.convertOperator(cond.Operator)
+	if err != nil {
+		return "", err
+	}
 
-	return fmt.Sprintf("%s %s %s", field, sqlOperator, valueStr), nil
+	return fmt.Sprintf("%s %s %s", fieldSQL, sqlOperator, valueStr), nil
 }
 
 // convertOperator converts OQL operators to SQL operators
-func (t *Translator) convertOperator(op string) string {
+func (t *Translator) convertOperator(op string) (string, error) {
 	switch op {
 	case "==":
-		return "="
+		return "=", nil
 	case "!=":
-		return "<>"
+		return "<>", nil
+	case ">", "<", ">=", "<=", "=":
+		return op, nil
 	default:
-		return op
+		return "", fmt.Errorf("unsupported operator: %s", op)
 	}
 }
 
@@ -237,7 +268,7 @@ func (t *Translator) getNativeColumn(attributeKey string) string {
 func (t *Translator) formatValue(value interface{}) string {
 	switch v := value.(type) {
 	case string:
-		return fmt.Sprintf("'%s'", strings.ReplaceAll(v, "'", "''"))
+		return sqlutil.StringLiteral(v)
 	case int, int64, int32:
 		return fmt.Sprintf("%d", v)
 	case float64, float32:
@@ -251,7 +282,7 @@ func (t *Translator) formatValue(value interface{}) string {
 		// Convert duration to nanoseconds
 		return fmt.Sprintf("%d", v.Nanoseconds())
 	default:
-		return fmt.Sprintf("'%v'", v)
+		return sqlutil.StringLiteral(fmt.Sprintf("%v", v))
 	}
 }
 
@@ -326,52 +357,80 @@ func (t *Translator) getTableName(signal oql.SignalType) string {
 }
 
 // translateAggregate translates an aggregate operation
-func (t *Translator) translateAggregate(baseSQL string, agg *oql.AggregateOp) string {
-	// Build the aggregation function
+func (t *Translator) translateAggregate(baseSQL string, agg *oql.AggregateOp) (string, error) {
+	fn := strings.ToLower(strings.TrimSpace(agg.Function))
+	if fn == "" {
+		return "", fmt.Errorf("aggregate function is required")
+	}
+	allowed := map[string]struct{}{
+		"avg": {}, "min": {}, "max": {}, "count": {}, "sum": {},
+	}
+	if _, ok := allowed[fn]; !ok {
+		return "", fmt.Errorf("unsupported aggregate function: %s", agg.Function)
+	}
+
+	var fieldSQL string
+	if agg.Field != "" {
+		var err error
+		fieldSQL, err = t.translateFieldReference(agg.Field)
+		if err != nil {
+			return "", fmt.Errorf("aggregate field: %w", err)
+		}
+	}
+
 	var aggFunc string
-	switch strings.ToLower(agg.Function) {
+	switch fn {
 	case "avg":
-		aggFunc = fmt.Sprintf("AVG(%s)", agg.Field)
+		if agg.Field == "" {
+			return "", fmt.Errorf("avg requires a field")
+		}
+		aggFunc = fmt.Sprintf("AVG(%s)", fieldSQL)
 	case "min":
-		aggFunc = fmt.Sprintf("MIN(%s)", agg.Field)
+		if agg.Field == "" {
+			return "", fmt.Errorf("min requires a field")
+		}
+		aggFunc = fmt.Sprintf("MIN(%s)", fieldSQL)
 	case "max":
-		aggFunc = fmt.Sprintf("MAX(%s)", agg.Field)
+		if agg.Field == "" {
+			return "", fmt.Errorf("max requires a field")
+		}
+		aggFunc = fmt.Sprintf("MAX(%s)", fieldSQL)
 	case "count":
 		if agg.Field == "" {
 			aggFunc = "COUNT(*)"
 		} else {
-			aggFunc = fmt.Sprintf("COUNT(%s)", agg.Field)
+			aggFunc = fmt.Sprintf("COUNT(%s)", fieldSQL)
 		}
 	case "sum":
-		aggFunc = fmt.Sprintf("SUM(%s)", agg.Field)
+		if agg.Field == "" {
+			return "", fmt.Errorf("sum requires a field")
+		}
+		aggFunc = fmt.Sprintf("SUM(%s)", fieldSQL)
 	default:
-		aggFunc = fmt.Sprintf("%s(%s)", strings.ToUpper(agg.Function), agg.Field)
+		return "", fmt.Errorf("unsupported aggregate function: %s", agg.Function)
 	}
 
-	// Add alias if specified
 	if agg.Alias != "" {
+		if err := validatePlainIdentifier(agg.Alias); err != nil {
+			return "", fmt.Errorf("aggregate alias: %w", err)
+		}
 		aggFunc = fmt.Sprintf("%s AS %s", aggFunc, agg.Alias)
 	}
 
-	// Build SELECT clause
 	var selectClause string
 	if len(t.groupByFields) > 0 {
-		// Include group by fields in SELECT along with aggregation
 		selectClause = strings.Join(t.groupByFields, ", ") + ", " + aggFunc
 	} else {
-		// Just the aggregation
 		selectClause = aggFunc
 	}
 
-	// Replace SELECT * with the select clause
 	sql := strings.Replace(baseSQL, "SELECT *", "SELECT "+selectClause, 1)
 
-	// Add GROUP BY clause if we have group by fields
 	if len(t.groupByFields) > 0 {
 		sql += " GROUP BY " + strings.Join(t.groupByFields, ", ")
 	}
 
-	return sql
+	return sql, nil
 }
 
 // translateGroupBy translates a group by operation
