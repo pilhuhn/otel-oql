@@ -169,6 +169,14 @@ func (t *Translator) translateBinaryCondition(cond *oql.BinaryCondition) (string
 	// Format the value
 	valueStr := t.formatValue(value)
 
+	// Check if there was a parse error
+	if strings.HasPrefix(valueStr, "'PARSE_ERROR:") {
+		// Extract the error message (remove quotes and PARSE_ERROR: prefix)
+		errMsg := strings.TrimPrefix(valueStr, "'PARSE_ERROR: ")
+		errMsg = strings.TrimSuffix(errMsg, "'")
+		return "", fmt.Errorf("%s", errMsg)
+	}
+
 	// Convert OQL operators to SQL operators
 	sqlOperator := t.convertOperator(operator)
 

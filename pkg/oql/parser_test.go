@@ -1,6 +1,7 @@
 package oql
 
 import (
+	"fmt"
 	"testing"
 	"time"
 
@@ -752,4 +753,77 @@ func TestParser_AttributeDotNotation(t *testing.T) {
 	binCond := whereOp.Condition.(*BinaryCondition)
 	assert.Equal(t, "attributes.custom_field", binCond.Left)
 	assert.Equal(t, "value", binCond.Right)
+}
+
+func TestParser_InvalidDurationFormats(t *testing.T) {
+	tests := []struct {
+		name  string
+		query string
+	}{
+		{
+			name:  "malformed float duration with seconds",
+			query: "signal=spans | where duration > 5.5.5s",
+		},
+		{
+			name:  "malformed float duration with milliseconds",
+			query: "signal=spans | where duration > 1.2.3ms",
+		},
+		{
+			name:  "malformed float duration with nanoseconds",
+			query: "signal=spans | where duration > 10.20.30ns",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			parser := NewParser(tt.query)
+			result, err := parser.Parse()
+			require.NoError(t, err, "Parser should not fail, but value should contain parse error")
+
+			// The parse succeeds, but the value should contain PARSE_ERROR
+			whereOp := result.Operations[0].(*WhereOp)
+			binCond := whereOp.Condition.(*BinaryCondition)
+			valueStr := fmt.Sprintf("%v", binCond.Right)
+			assert.Contains(t, valueStr, "PARSE_ERROR", "Value should contain parse error marker")
+		})
+	}
+}
+
+func TestHasTimeUnitSuffix(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected bool
+	}{
+		// Valid time unit patterns
+		{"nanoseconds", "1000ns", true},
+		{"microseconds", "500us", true},
+		{"milliseconds", "100ms", true},
+		{"seconds", "5s", true},
+		{"minutes", "2m", true},
+		{"hours", "1h", true},
+		{"float duration", "1.5s", true},
+		{"negative duration", "-5s", true},
+
+		// Should NOT match - no digits
+		{"just unit s", "s", false},
+		{"just unit ms", "ms", false},
+		{"word ending in s", "status", false},
+		{"word ending in m", "custom", false},
+
+		// Should NOT match - invalid patterns
+		{"empty", "", false},
+		{"no unit", "100", false},
+		{"invalid suffix", "100xyz", false},
+
+		// Edge cases with time units but should still match
+		{"space before unit", "5 s", false}, // Currently doesn't match - could enhance if needed
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := hasTimeUnitSuffix(tt.input)
+			assert.Equal(t, tt.expected, got, "hasTimeUnitSuffix(%q)", tt.input)
+		})
+	}
 }

@@ -188,6 +188,7 @@ func (p *Parser) parseSingleCondition(s string) (Condition, error) {
 }
 
 // parseValue parses a value (string, number, duration, boolean)
+// Returns an error value if parsing fails for values that look like they should parse
 func (p *Parser) parseValue(s string) interface{} {
 	s = strings.TrimSpace(s)
 
@@ -205,11 +206,15 @@ func (p *Parser) parseValue(s string) interface{} {
 	}
 
 	// Try duration (check for time unit suffixes)
-	if strings.HasSuffix(s, "ns") || strings.HasSuffix(s, "us") || strings.HasSuffix(s, "ms") ||
-	   strings.HasSuffix(s, "s") || strings.HasSuffix(s, "m") || strings.HasSuffix(s, "h") {
-		if d, err := parseDuration(s); err == nil {
-			return d
+	// Only attempt if it looks like a duration to avoid false positives
+	if hasTimeUnitSuffix(s) {
+		d, err := parseDuration(s)
+		if err != nil {
+			// Value looks like a duration but failed to parse - return error string
+			// This will cause a validation error downstream instead of silent failure
+			return fmt.Sprintf("PARSE_ERROR: invalid duration format '%s': %v", s, err)
 		}
+		return d
 	}
 
 	// Try integer
@@ -224,6 +229,54 @@ func (p *Parser) parseValue(s string) interface{} {
 
 	// Default to string
 	return s
+}
+
+// hasTimeUnitSuffix checks if a string has a time unit suffix
+// More precise than just checking suffix to avoid false positives like "status" ending in "s"
+func hasTimeUnitSuffix(s string) bool {
+	// Check for common time unit patterns: number followed by unit
+	// Must have at least one digit before the unit
+	if len(s) < 2 {
+		return false
+	}
+
+	// Check if it ends with a time unit
+	timeUnits := []string{"ns", "us", "ms", "s", "m", "h"}
+	for _, unit := range timeUnits {
+		if strings.HasSuffix(s, unit) {
+			// Get the part before the unit
+			beforeUnit := strings.TrimSuffix(s, unit)
+			if beforeUnit == "" {
+				return false
+			}
+
+			// Check if there's at least one digit AND the last character is a digit or dot
+			// This ensures "5s" matches but "5 s" and "status" don't
+			hasDigit := false
+			lastChar := beforeUnit[len(beforeUnit)-1]
+			lastCharIsNumeric := (lastChar >= '0' && lastChar <= '9') || lastChar == '.' || lastChar == '-'
+
+			if !lastCharIsNumeric {
+				// Last char before unit is not numeric, so this is not a duration
+				// e.g., "5 s" has space before "s", "status" has 'u' before "s"
+				continue
+			}
+
+			for _, ch := range beforeUnit {
+				if ch >= '0' && ch <= '9' {
+					hasDigit = true
+					break
+				}
+			}
+
+			// Only consider it a time unit if there's a digit AND last char is numeric
+			// This prevents "status" from matching "s" suffix and "5 s" from matching
+			if hasDigit {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // parseExpand parses an expand operation
