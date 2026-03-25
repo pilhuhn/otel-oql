@@ -11,6 +11,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 )
 
 const version = "1.0.0"
@@ -48,6 +49,7 @@ func main() {
 	verbose := flag.Bool("verbose", false, "Show verbose output including SQL and stats")
 	jsonOutput := flag.Bool("json", false, "Output raw JSON response")
 	showVersion := flag.Bool("version", false, "Show version and exit")
+	allFields := flag.Bool("all-fields", false, "Show all fields (default: only interesting fields)")
 
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, "oql-cli - OTEL-OQL Query Client v%s\n\n", version)
@@ -84,15 +86,15 @@ func main() {
 
 	if isInteractive {
 		// Interactive REPL mode
-		runInteractiveMode(*endpoint, *tenantID, *verbose, *jsonOutput)
+		runInteractiveMode(*endpoint, *tenantID, *verbose, *jsonOutput, *allFields)
 	} else {
 		// Single query mode
-		runSingleQuery(*endpoint, *tenantID, *verbose, *jsonOutput)
+		runSingleQuery(*endpoint, *tenantID, *verbose, *jsonOutput, *allFields)
 	}
 }
 
 // runInteractiveMode runs the CLI in interactive REPL mode
-func runInteractiveMode(endpoint, tenantID string, verbose, jsonOutput bool) {
+func runInteractiveMode(endpoint, tenantID string, verbose, jsonOutput, allFields bool) {
 	fmt.Fprintf(os.Stderr, "OQL Interactive Shell (type 'help' for examples, 'undo' to remove last refinement, 'exit' or Ctrl+D to quit)\n\n")
 
 	scanner := bufio.NewScanner(os.Stdin)
@@ -138,7 +140,7 @@ func runInteractiveMode(endpoint, tenantID string, verbose, jsonOutput bool) {
 			fmt.Fprintf(os.Stderr, "Undid last refinement. Current query:\n→ %s\n\n", lastQuery)
 
 			// Re-execute the previous query to show results
-			resp, err := executeQueryWithRetry(endpoint, tenantID, lastQuery)
+			resp, err := executeQuery(endpoint, tenantID, lastQuery)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "Error: %v\n\n", err)
 				continue
@@ -151,7 +153,7 @@ func runInteractiveMode(endpoint, tenantID string, verbose, jsonOutput bool) {
 				jsonBytes, _ := json.MarshalIndent(resp, "", "  ")
 				fmt.Println(string(jsonBytes))
 			} else {
-				printResults(resp, verbose)
+				printResults(resp, lastQuery, verbose, allFields)
 			}
 			fmt.Fprintf(os.Stderr, "\n")
 			continue
@@ -186,8 +188,8 @@ func runInteractiveMode(endpoint, tenantID string, verbose, jsonOutput bool) {
 			fmt.Fprintf(os.Stderr, "→ %s\n", query)
 		}
 
-		// Execute query with retry on error
-		resp, err := executeQueryWithRetry(endpoint, tenantID, query)
+		// Execute query (no retry in interactive mode to avoid stdin conflicts)
+		resp, err := executeQuery(endpoint, tenantID, query)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n\n", err)
 			continue
@@ -217,7 +219,7 @@ func runInteractiveMode(endpoint, tenantID string, verbose, jsonOutput bool) {
 			}
 			fmt.Println(string(jsonBytes))
 		} else {
-			printResults(resp, verbose)
+			printResults(resp, query, verbose, allFields)
 		}
 
 		fmt.Fprintf(os.Stderr, "\n") // Add spacing between queries
@@ -299,15 +301,23 @@ func convertTimeUnits(query string) string {
 	result := query
 	for _, p := range patterns {
 		// Look for patterns like "123s" or "456ms"
-		// Use a simple approach: find number followed by unit
+		searchPos := 0
 		for {
-			idx := strings.Index(result, p.unit)
-			if idx == -1 || idx == 0 {
+			// Search from current position
+			idx := strings.Index(result[searchPos:], p.unit)
+			if idx == -1 {
 				break
+			}
+			idx += searchPos // Adjust to absolute position
+
+			// Check if at start of string
+			if idx == 0 {
+				searchPos = idx + len(p.unit)
+				continue
 			}
 
 			// Check if this is actually a time unit (preceded by a digit)
-			if idx > 0 && result[idx-1] >= '0' && result[idx-1] <= '9' {
+			if result[idx-1] >= '0' && result[idx-1] <= '9' {
 				// Find the start of the number
 				start := idx - 1
 				for start > 0 && ((result[start-1] >= '0' && result[start-1] <= '9') || result[start-1] == '.') {
@@ -321,38 +331,40 @@ func convertTimeUnits(query string) string {
 					nanoseconds := int64(num * float64(p.multiplier))
 
 					// Check if there's a space or other character after the unit
-					// to avoid matching "msi" when looking for "ms"
 					endIdx := idx + len(p.unit)
+					validTerminator := false
 					if endIdx < len(result) {
 						nextChar := result[endIdx]
 						// Only convert if followed by space, operator, or end of string
 						if nextChar == ' ' || nextChar == '|' || nextChar == ')' || nextChar == '\n' {
-							// Replace the value with unit with nanoseconds
-							result = result[:start] + strconv.FormatInt(nanoseconds, 10) + result[endIdx:]
-							continue
+							validTerminator = true
 						}
 					} else {
 						// End of string
-						result = result[:start] + strconv.FormatInt(nanoseconds, 10)
-						break
+						validTerminator = true
+					}
+
+					if validTerminator {
+						// Replace the value with unit with nanoseconds
+						replacement := strconv.FormatInt(nanoseconds, 10)
+						result = result[:start] + replacement + result[endIdx:]
+						// Continue searching from after the replacement
+						searchPos = start + len(replacement)
+						continue
 					}
 				}
 			}
 
-			// If we didn't convert, move past this occurrence to avoid infinite loop
-			// Replace this occurrence with a placeholder and continue
-			result = result[:idx] + "\x00" + p.unit + result[idx+len(p.unit):]
+			// Didn't convert - skip past this occurrence
+			searchPos = idx + len(p.unit)
 		}
-
-		// Restore any placeholders
-		result = strings.ReplaceAll(result, "\x00"+p.unit, p.unit)
 	}
 
 	return result
 }
 
 // runSingleQuery runs a single query and exits
-func runSingleQuery(endpoint, tenantID string, verbose, jsonOutput bool) {
+func runSingleQuery(endpoint, tenantID string, verbose, jsonOutput, allFields bool) {
 	var query string
 
 	if flag.NArg() > 0 {
@@ -398,7 +410,7 @@ func runSingleQuery(endpoint, tenantID string, verbose, jsonOutput bool) {
 		}
 		fmt.Println(string(jsonBytes))
 	} else {
-		printResults(resp, verbose)
+		printResults(resp, query, verbose, allFields)
 	}
 }
 
@@ -645,16 +657,453 @@ func executeQuery(endpoint, tenantID, query string) (*QueryResponse, error) {
 	return &queryResp, nil
 }
 
+// detectSignalType detects the signal type from the query
+func detectSignalType(query string) string {
+	lowerQuery := strings.ToLower(query)
+
+	if strings.Contains(lowerQuery, "signal=spans") || strings.Contains(lowerQuery, "signal=span") ||
+		strings.Contains(lowerQuery, "signal=traces") || strings.Contains(lowerQuery, "signal=trace") ||
+		strings.Contains(lowerQuery, "signal=s") || strings.Contains(lowerQuery, "signal=t") {
+		return "spans"
+	}
+	if strings.Contains(lowerQuery, "signal=metrics") || strings.Contains(lowerQuery, "signal=metric") ||
+		strings.Contains(lowerQuery, "signal=m") {
+		return "metrics"
+	}
+	if strings.Contains(lowerQuery, "signal=logs") || strings.Contains(lowerQuery, "signal=log") ||
+		strings.Contains(lowerQuery, "signal=l") {
+		return "logs"
+	}
+	return "spans" // default
+}
+
+// detectSignalTypeFromSQL detects signal type from SQL table name
+func detectSignalTypeFromSQL(sql string) string {
+	lowerSQL := strings.ToLower(sql)
+	if strings.Contains(lowerSQL, "otel_spans") {
+		return "Spans"
+	}
+	if strings.Contains(lowerSQL, "otel_metrics") {
+		return "Metrics"
+	}
+	if strings.Contains(lowerSQL, "otel_logs") {
+		return "Logs"
+	}
+	return "Results"
+}
+
+// getPotentiallyInterestingColumns returns a broader set of columns to consider based on signal type and query
+func getPotentiallyInterestingColumns(signalType string, query string) []string {
+	isExpandTrace := strings.Contains(strings.ToLower(query), "expand trace")
+
+	switch signalType {
+	case "spans":
+		columns := []string{
+			"duration", "service_name", "error",
+			"http_method", "http_route", "http_status_code",
+			"db_system", "db_statement",
+			"messaging_system", "messaging_destination",
+			"rpc_service", "rpc_method",
+			"trace_id",
+		}
+		// Add span hierarchy columns if doing expand trace
+		if isExpandTrace {
+			columns = append(columns, "span_id", "parent_span_id")
+		}
+		// Note: "name" is last to make indentation more visible in expand trace
+		columns = append(columns, "name")
+		return columns
+
+	case "metrics":
+		return []string{
+			"metric_name", "value", "service_name", "timestamp",
+			"exemplar_trace_id", "job", "instance", "environment",
+		}
+	case "logs":
+		return []string{
+			"timestamp", "severity_text", "body", "service_name",
+			"trace_id", "span_id", "log_level", "log_source",
+		}
+	default:
+		return []string{
+			"duration", "service_name", "error", "http_status_code",
+			"trace_id", "name",
+		}
+	}
+}
+
+// extractFilteredFields extracts field names from where/filter conditions in the query
+func extractFilteredFields(query string) map[string]string {
+	filtered := make(map[string]string)
+
+	// Split query by pipes to process each operation
+	parts := strings.Split(query, "|")
+
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		lowerPart := strings.ToLower(part)
+
+		// Check if this part contains a where or filter clause
+		var conditionPart string
+		if idx := strings.Index(lowerPart, " where "); idx != -1 {
+			conditionPart = part[idx+7:] // Skip " where "
+		} else if strings.HasPrefix(lowerPart, "where ") {
+			conditionPart = part[6:] // Skip "where "
+		} else if strings.HasPrefix(lowerPart, "filter ") {
+			conditionPart = part[7:] // Skip "filter "
+		} else {
+			continue
+		}
+
+		conditionPart = strings.TrimSpace(conditionPart)
+
+		// Split by "and" and "or" to handle multiple conditions
+		conditions := []string{conditionPart}
+		for _, separator := range []string{" and ", " or "} {
+			newConditions := make([]string, 0)
+			for _, cond := range conditions {
+				newConditions = append(newConditions, strings.Split(cond, separator)...)
+			}
+			conditions = newConditions
+		}
+
+		// Process each condition
+		for _, condition := range conditions {
+			condition = strings.TrimSpace(condition)
+
+			// Try to extract field=value or field==value (equality only)
+			var field, value string
+			if strings.Contains(condition, "==") {
+				parts := strings.SplitN(condition, "==", 2)
+				if len(parts) == 2 {
+					field = strings.TrimSpace(parts[0])
+					value = strings.TrimSpace(parts[1])
+				}
+			} else if strings.Contains(condition, "=") && !strings.Contains(condition, ">") && !strings.Contains(condition, "<") && !strings.Contains(condition, "!") {
+				parts := strings.SplitN(condition, "=", 2)
+				if len(parts) == 2 {
+					field = strings.TrimSpace(parts[0])
+					value = strings.TrimSpace(parts[1])
+				}
+			}
+
+			if field != "" && value != "" {
+				// Remove quotes from value and any trailing content after closing quote
+				if strings.HasPrefix(value, "\"") {
+					// Find the closing quote
+					if endIdx := strings.Index(value[1:], "\""); endIdx != -1 {
+						value = value[1 : endIdx+1]
+					} else {
+						value = strings.Trim(value, "\"'")
+					}
+				} else if strings.HasPrefix(value, "'") {
+					// Find the closing quote
+					if endIdx := strings.Index(value[1:], "'"); endIdx != -1 {
+						value = value[1 : endIdx+1]
+					} else {
+						value = strings.Trim(value, "\"'")
+					}
+				} else {
+					// No quotes - take everything up to first space
+					if spaceIdx := strings.Index(value, " "); spaceIdx != -1 {
+						value = value[:spaceIdx]
+					}
+				}
+				filtered[field] = value
+			}
+		}
+	}
+
+	return filtered
+}
+
+// filterColumns returns the columns to display based on signal type and actual data content
+func filterColumns(allColumns []string, signalType string, rows [][]interface{}, query string) ([]string, []int, map[string]string) {
+	// Get potentially interesting columns for this signal type
+	potentialColumns := getPotentiallyInterestingColumns(signalType, query)
+
+	// Build map for quick lookup
+	potentialMap := make(map[string]bool)
+	for _, col := range potentialColumns {
+		potentialMap[col] = true
+	}
+
+	// Extract fields that were filtered on with equality
+	filteredFields := extractFilteredFields(query)
+
+	// Analyze each column
+	displayColumns := make([]string, 0)
+	columnIndices := make([]int, 0)
+	hiddenFilters := make(map[string]string) // Columns hidden due to filtering
+
+	for i, col := range allColumns {
+		// Only consider potentially interesting columns
+		if !potentialMap[col] {
+			continue
+		}
+
+		// Check if this column has any non-null/non-empty values
+		hasData := false
+		var firstNonNullValue interface{}
+		allIdentical := true
+
+		for _, row := range rows {
+			if i < len(row) && row[i] != nil {
+				val := fmt.Sprintf("%v", row[i])
+				if val != "" && val != "null" {
+					hasData = true
+					if firstNonNullValue == nil {
+						firstNonNullValue = row[i]
+					} else if fmt.Sprintf("%v", firstNonNullValue) != val {
+						allIdentical = false
+					}
+				}
+			}
+		}
+
+		// Skip columns with no data
+		if !hasData {
+			continue
+		}
+
+		// If user filtered on this field with equality and all values are identical, hide it
+		if allIdentical && len(filteredFields) > 0 {
+			if filterValue, wasFiltered := filteredFields[col]; wasFiltered {
+				hiddenFilters[col] = filterValue
+				continue
+			}
+		}
+
+		// This column has data and should be displayed
+		displayColumns = append(displayColumns, col)
+		columnIndices = append(columnIndices, i)
+	}
+
+	// If no columns would be shown, fall back to basic set
+	if len(displayColumns) == 0 {
+		basicColumns := []string{"duration", "service_name", "name", "trace_id"}
+		for _, col := range basicColumns {
+			for i, c := range allColumns {
+				if c == col {
+					displayColumns = append(displayColumns, col)
+					columnIndices = append(columnIndices, i)
+					break
+				}
+			}
+		}
+	}
+
+	return displayColumns, columnIndices, hiddenFilters
+}
+
+// formatDuration converts nanoseconds to human-readable duration
+func formatDuration(ns int64) string {
+	if ns < 0 {
+		return "N/A"
+	}
+
+	// Convert to appropriate unit
+	if ns < 1000 {
+		return fmt.Sprintf("%dns", ns)
+	} else if ns < 1000000 {
+		return fmt.Sprintf("%.1fus", float64(ns)/1000)
+	} else if ns < 1000000000 {
+		return fmt.Sprintf("%.1fms", float64(ns)/1000000)
+	} else {
+		return fmt.Sprintf("%.2fs", float64(ns)/1000000000)
+	}
+}
+
+// formatTimestamp converts milliseconds since epoch to readable timestamp
+func formatTimestamp(ms int64) string {
+	if ms <= 0 {
+		return "N/A"
+	}
+
+	// Convert to time.Time
+	t := time.Unix(0, ms*1000000) // ms to nanoseconds
+
+	// Format as ISO 8601 without timezone (more compact)
+	return t.Format("2006-01-02 15:04:05")
+}
+
+// formatValue formats a value based on column name
+func formatValue(colName string, value interface{}) string {
+	if value == nil {
+		return ""
+	}
+
+	// Format based on column name
+	switch colName {
+	case "duration":
+		// Duration is in nanoseconds
+		if numVal, ok := toInt64(value); ok {
+			return formatDuration(numVal)
+		}
+
+	case "timestamp", "start_time", "end_time":
+		// Timestamps are in milliseconds
+		if numVal, ok := toInt64(value); ok {
+			return formatTimestamp(numVal)
+		}
+
+	case "http_status_code", "status_code":
+		// Don't show -1 (null placeholder)
+		if numVal, ok := toInt64(value); ok && numVal == -1 {
+			return ""
+		}
+
+	case "error":
+		// Show as true/false
+		if boolVal, ok := value.(bool); ok {
+			if boolVal {
+				return "true"
+			}
+			return ""
+		}
+	}
+
+	// Default formatting
+	return fmt.Sprintf("%v", value)
+}
+
+// toInt64 converts various numeric types to int64
+func toInt64(value interface{}) (int64, bool) {
+	switch v := value.(type) {
+	case int:
+		return int64(v), true
+	case int32:
+		return int64(v), true
+	case int64:
+		return v, true
+	case uint:
+		return int64(v), true
+	case uint32:
+		return int64(v), true
+	case uint64:
+		return int64(v), true
+	case float64:
+		return int64(v), true
+	case float32:
+		return int64(v), true
+	default:
+		return 0, false
+	}
+}
+
+// buildTraceIndentation builds an indentation map for trace hierarchy
+func buildTraceIndentation(columns []string, rows [][]interface{}) map[int]int {
+	indentMap := make(map[int]int)
+
+	// Find span_id and parent_span_id column indices
+	spanIDIdx := -1
+	parentSpanIDIdx := -1
+	for i, col := range columns {
+		if col == "span_id" {
+			spanIDIdx = i
+		} else if col == "parent_span_id" {
+			parentSpanIDIdx = i
+		}
+	}
+
+	// If we don't have both columns, no indentation
+	if spanIDIdx == -1 || parentSpanIDIdx == -1 {
+		return indentMap
+	}
+
+	// Build span_id -> row index map
+	spanToRow := make(map[string]int)
+	for rowIdx, row := range rows {
+		if spanIDIdx < len(row) && row[spanIDIdx] != nil {
+			spanID := fmt.Sprintf("%v", row[spanIDIdx])
+			spanToRow[spanID] = rowIdx
+		}
+	}
+
+	// Calculate indentation depth for each row
+	var calculateDepth func(rowIdx int, visited map[int]bool) int
+	calculateDepth = func(rowIdx int, visited map[int]bool) int {
+		if visited[rowIdx] {
+			return 0 // Circular reference, treat as root
+		}
+		visited[rowIdx] = true
+
+		row := rows[rowIdx]
+		if parentSpanIDIdx >= len(row) || row[parentSpanIDIdx] == nil {
+			return 0 // Root span (no parent)
+		}
+
+		parentSpanID := fmt.Sprintf("%v", row[parentSpanIDIdx])
+		if parentSpanID == "" || parentSpanID == "0" || parentSpanID == "00000000000000000000000000000000" {
+			return 0 // Empty parent = root
+		}
+
+		// Find parent row
+		if parentRowIdx, ok := spanToRow[parentSpanID]; ok {
+			return 1 + calculateDepth(parentRowIdx, visited)
+		}
+
+		return 0 // Parent not in result set
+	}
+
+	// Calculate depth for each row
+	for rowIdx := range rows {
+		visited := make(map[int]bool)
+		indentMap[rowIdx] = calculateDepth(rowIdx, visited)
+	}
+
+	return indentMap
+}
+
+// printFormattedRow prints a single row with formatted values
+func printFormattedRow(columns []string, row []interface{}, indices []int, indent int) {
+	widths := getColumnWidths(columns)
+
+	for i, idx := range indices {
+		if idx >= len(row) {
+			fmt.Printf("%-*s", widths[i]+2, "N/A")
+			continue
+		}
+
+		// Format the value
+		strVal := formatValue(columns[i], row[idx])
+
+		// Add indentation to the "name" column for trace hierarchy
+		if columns[i] == "name" && indent > 0 {
+			indentStr := strings.Repeat("  ", indent)
+			strVal = indentStr + strVal
+		}
+
+		// Truncate long values
+		if len(strVal) > widths[i] {
+			strVal = strVal[:widths[i]-3] + "..."
+		}
+
+		fmt.Printf("%-*s", widths[i]+2, strVal)
+	}
+	fmt.Println()
+}
+
 // printResults prints query results in a formatted table
-func printResults(resp *QueryResponse, verbose bool) {
+func printResults(resp *QueryResponse, query string, verbose, allFields bool) {
 	if len(resp.Results) == 0 {
 		fmt.Println("No results")
 		return
 	}
 
+	// Detect query context
+	isCorrelateQuery := strings.Contains(strings.ToLower(query), "correlate")
+	isExpandTrace := strings.Contains(strings.ToLower(query), "expand trace")
+	signalType := detectSignalType(query)
+
 	for i, result := range resp.Results {
 		if len(resp.Results) > 1 {
-			fmt.Printf("\n=== Result Set %d ===\n", i+1)
+			if isCorrelateQuery {
+				// For correlate queries, show signal type header
+				fmt.Printf("\n=== %s ===\n", detectSignalTypeFromSQL(result.SQL))
+			} else {
+				fmt.Printf("\n=== Result Set %d ===\n", i+1)
+			}
 		}
 
 		if verbose {
@@ -670,32 +1119,87 @@ func printResults(resp *QueryResponse, verbose bool) {
 			continue
 		}
 
-		// Print table header
-		printTableHeader(result.Columns)
+		// Filter columns unless --all-fields is specified
+		displayColumns := result.Columns
+		columnIndices := make([]int, len(result.Columns))
+		for i := range columnIndices {
+			columnIndices[i] = i
+		}
+		var hiddenFilters map[string]string
 
-		// Print table rows
-		for _, row := range result.Rows {
-			printTableRow(result.Columns, row)
+		if !allFields {
+			displayColumns, columnIndices, hiddenFilters = filterColumns(result.Columns, signalType, result.Rows, query)
+		}
+
+		if len(displayColumns) == 0 {
+			fmt.Println("No displayable columns")
+			continue
+		}
+
+		// Print filter summary if we hid any filtered columns
+		if len(hiddenFilters) > 0 {
+			filterParts := make([]string, 0)
+			for field, value := range hiddenFilters {
+				filterParts = append(filterParts, fmt.Sprintf("%s=%s", field, value))
+			}
+			fmt.Printf("[Filtered by: %s]\n", strings.Join(filterParts, ", "))
+		}
+
+		// Print table header
+		printTableHeader(displayColumns)
+
+		// Build indentation map for expand trace queries
+		indentMap := make(map[int]int) // row index -> indent level
+		if isExpandTrace {
+			indentMap = buildTraceIndentation(result.Columns, result.Rows)
+		}
+
+		// Print table rows with formatting
+		for rowIdx, row := range result.Rows {
+			indent := indentMap[rowIdx]
+			printFormattedRow(displayColumns, row, columnIndices, indent)
 		}
 
 		fmt.Printf("\n%d row(s) returned\n", len(result.Rows))
 	}
 }
 
-// printTableHeader prints the table header
-func printTableHeader(columns []string) {
-	// Calculate column widths
+// getDisplayColumnName returns a shortened column name for display
+func getDisplayColumnName(col string) string {
+	switch col {
+	case "http_status_code":
+		return "status"
+	case "severity_text":
+		return "severity"
+	case "severity_number":
+		return "sev_num"
+	default:
+		return col
+	}
+}
+
+// getColumnWidths calculates the display width for each column
+func getColumnWidths(columns []string) []int {
 	widths := make([]int, len(columns))
 	for i, col := range columns {
-		widths[i] = len(col)
+		// Use display name for width calculation
+		displayName := getDisplayColumnName(col)
+		widths[i] = len(displayName)
 		if widths[i] < 10 {
 			widths[i] = 10
 		}
 	}
+	return widths
+}
 
-	// Print header
+// printTableHeader prints the table header
+func printTableHeader(columns []string) {
+	widths := getColumnWidths(columns)
+
+	// Print header with display names
 	for i, col := range columns {
-		fmt.Printf("%-*s", widths[i]+2, col)
+		displayName := getDisplayColumnName(col)
+		fmt.Printf("%-*s", widths[i]+2, displayName)
 	}
 	fmt.Println()
 
