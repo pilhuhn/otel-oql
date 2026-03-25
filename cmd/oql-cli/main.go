@@ -173,9 +173,6 @@ func runInteractiveMode(endpoint, tenantID string, verbose, jsonOutput, allField
 			}
 		}
 
-		// Parse and convert time units in the query
-		query = convertTimeUnits(query)
-
 		if isRefinement {
 			if len(queryHistory) == 0 {
 				fmt.Fprintf(os.Stderr, "Error: No previous query to refine. Start with a signal= query first.\n\n")
@@ -184,7 +181,6 @@ func runInteractiveMode(endpoint, tenantID string, verbose, jsonOutput, allField
 			// Append refinement to last query
 			lastQuery := queryHistory[len(queryHistory)-1]
 			query = lastQuery + " | " + input
-			query = convertTimeUnits(query)
 			fmt.Fprintf(os.Stderr, "→ %s\n", query)
 		}
 
@@ -280,87 +276,6 @@ func looksLikeCondition(input string) bool {
 	}
 
 	return false
-}
-
-// convertTimeUnits converts time values with units (s, ms, ns) to nanoseconds
-// Examples: "duration > 5s" -> "duration > 5000000000"
-//           "duration < 100ms" -> "duration < 100000000"
-func convertTimeUnits(query string) string {
-	// Regex patterns for time values with units
-	// Match numbers followed by time units (s, ms, ns)
-	patterns := []struct {
-		unit       string
-		multiplier int64
-	}{
-		{"s", 1000000000},  // seconds to nanoseconds
-		{"ms", 1000000},    // milliseconds to nanoseconds
-		{"us", 1000},       // microseconds to nanoseconds
-		{"ns", 1},          // nanoseconds (no conversion)
-	}
-
-	result := query
-	for _, p := range patterns {
-		// Look for patterns like "123s" or "456ms"
-		searchPos := 0
-		for {
-			// Search from current position
-			idx := strings.Index(result[searchPos:], p.unit)
-			if idx == -1 {
-				break
-			}
-			idx += searchPos // Adjust to absolute position
-
-			// Check if at start of string
-			if idx == 0 {
-				searchPos = idx + len(p.unit)
-				continue
-			}
-
-			// Check if this is actually a time unit (preceded by a digit)
-			if result[idx-1] >= '0' && result[idx-1] <= '9' {
-				// Find the start of the number
-				start := idx - 1
-				for start > 0 && ((result[start-1] >= '0' && result[start-1] <= '9') || result[start-1] == '.') {
-					start--
-				}
-
-				// Extract the number
-				numStr := result[start:idx]
-				if num, err := strconv.ParseFloat(numStr, 64); err == nil {
-					// Convert to nanoseconds
-					nanoseconds := int64(num * float64(p.multiplier))
-
-					// Check if there's a space or other character after the unit
-					endIdx := idx + len(p.unit)
-					validTerminator := false
-					if endIdx < len(result) {
-						nextChar := result[endIdx]
-						// Only convert if followed by space, operator, or end of string
-						if nextChar == ' ' || nextChar == '|' || nextChar == ')' || nextChar == '\n' {
-							validTerminator = true
-						}
-					} else {
-						// End of string
-						validTerminator = true
-					}
-
-					if validTerminator {
-						// Replace the value with unit with nanoseconds
-						replacement := strconv.FormatInt(nanoseconds, 10)
-						result = result[:start] + replacement + result[endIdx:]
-						// Continue searching from after the replacement
-						searchPos = start + len(replacement)
-						continue
-					}
-				}
-			}
-
-			// Didn't convert - skip past this occurrence
-			searchPos = idx + len(p.unit)
-		}
-	}
-
-	return result
 }
 
 // runSingleQuery runs a single query and exits

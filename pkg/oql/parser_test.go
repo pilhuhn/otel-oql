@@ -161,6 +161,16 @@ func TestParser_DurationParsing(t *testing.T) {
 		expected time.Duration
 	}{
 		{
+			name:     "nanoseconds",
+			query:    "signal=spans | where duration == 1000ns",
+			expected: 1000 * time.Nanosecond,
+		},
+		{
+			name:     "microseconds",
+			query:    "signal=spans | where duration == 500us",
+			expected: 500 * time.Microsecond,
+		},
+		{
 			name:     "milliseconds",
 			query:    "signal=spans | where duration == 500ms",
 			expected: 500 * time.Millisecond,
@@ -180,6 +190,21 @@ func TestParser_DurationParsing(t *testing.T) {
 			query:    "signal=spans | where duration == 1h",
 			expected: 1 * time.Hour,
 		},
+		{
+			name:     "float seconds",
+			query:    "signal=spans | where duration == 1.5s",
+			expected: 1500 * time.Millisecond,
+		},
+		{
+			name:     "float milliseconds",
+			query:    "signal=spans | where duration == 100.5ms",
+			expected: 100500 * time.Microsecond,
+		},
+		{
+			name:     "duration in comparison",
+			query:    "signal=spans | where duration > 20ms",
+			expected: 20 * time.Millisecond,
+		},
 	}
 
 	for _, tt := range tests {
@@ -192,6 +217,117 @@ func TestParser_DurationParsing(t *testing.T) {
 			binCond := whereOp.Condition.(*BinaryCondition)
 
 			assert.Equal(t, tt.expected, binCond.Right)
+		})
+	}
+}
+
+func TestParseDuration(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected time.Duration
+		wantErr  bool
+	}{
+		// Nanoseconds
+		{"nanoseconds", "1000ns", 1000 * time.Nanosecond, false},
+		{"nanoseconds float", "1500.5ns", 1500 * time.Nanosecond, false},
+
+		// Microseconds
+		{"microseconds", "100us", 100 * time.Microsecond, false},
+		{"microseconds float", "50.5us", 50500 * time.Nanosecond, false},
+
+		// Milliseconds
+		{"milliseconds", "100ms", 100 * time.Millisecond, false},
+		{"milliseconds float", "250.5ms", 250500 * time.Microsecond, false},
+
+		// Seconds
+		{"seconds", "5s", 5 * time.Second, false},
+		{"seconds float", "1.5s", 1500 * time.Millisecond, false},
+
+		// Minutes
+		{"minutes", "2m", 2 * time.Minute, false},
+		{"minutes float", "1.5m", 90 * time.Second, false},
+
+		// Hours
+		{"hours", "1h", 1 * time.Hour, false},
+		{"hours float", "2.5h", 150 * time.Minute, false},
+
+		// Complex durations (Go's parser)
+		{"complex duration", "1h30m", 90 * time.Minute, false},
+		{"complex duration 2", "2h15m30s", 2*time.Hour + 15*time.Minute + 30*time.Second, false},
+
+		// Edge cases
+		{"zero", "0s", 0, false},
+		{"negative", "-5s", -5 * time.Second, false},
+
+		// Error cases
+		{"invalid format", "abc", 0, true},
+		{"no unit", "100", 0, true},
+		{"invalid unit", "100xs", 0, true},
+		{"empty", "", 0, true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := parseDuration(tt.input)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("parseDuration(%q) error = %v, wantErr %v", tt.input, err, tt.wantErr)
+				return
+			}
+			if !tt.wantErr && got != tt.expected {
+				t.Errorf("parseDuration(%q) = %v, want %v", tt.input, got, tt.expected)
+			}
+		})
+	}
+}
+
+func TestNormalizeSignalType(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected SignalType
+		wantErr  bool
+	}{
+		// Metrics
+		{"metrics plural", "metrics", SignalMetrics, false},
+		{"metric singular", "metric", SignalMetrics, false},
+		{"m abbreviation", "m", SignalMetrics, false},
+		{"metrics uppercase", "METRICS", SignalMetrics, false},
+
+		// Logs
+		{"logs plural", "logs", SignalLogs, false},
+		{"log singular", "log", SignalLogs, false},
+		{"l abbreviation", "l", SignalLogs, false},
+		{"logs mixed case", "Logs", SignalLogs, false},
+
+		// Spans
+		{"spans plural", "spans", SignalSpans, false},
+		{"span singular", "span", SignalSpans, false},
+		{"s abbreviation", "s", SignalSpans, false},
+
+		// Traces
+		{"traces plural", "traces", SignalTraces, false},
+		{"trace singular", "trace", SignalTraces, false},
+		{"t abbreviation", "t", SignalTraces, false},
+
+		// Whitespace handling
+		{"with spaces", "  spans  ", SignalSpans, false},
+
+		// Error cases
+		{"invalid", "invalid", "", true},
+		{"empty", "", "", true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := normalizeSignalType(tt.input)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("normalizeSignalType(%q) error = %v, wantErr %v", tt.input, err, tt.wantErr)
+				return
+			}
+			if !tt.wantErr && got != tt.expected {
+				t.Errorf("normalizeSignalType(%q) = %v, want %v", tt.input, got, tt.expected)
+			}
 		})
 	}
 }

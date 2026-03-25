@@ -204,8 +204,9 @@ func (p *Parser) parseValue(s string) interface{} {
 		return false
 	}
 
-	// Try duration
-	if strings.HasSuffix(s, "ms") || strings.HasSuffix(s, "s") || strings.HasSuffix(s, "m") || strings.HasSuffix(s, "h") {
+	// Try duration (check for time unit suffixes)
+	if strings.HasSuffix(s, "ns") || strings.HasSuffix(s, "us") || strings.HasSuffix(s, "ms") ||
+	   strings.HasSuffix(s, "s") || strings.HasSuffix(s, "m") || strings.HasSuffix(s, "h") {
 		if d, err := parseDuration(s); err == nil {
 			return d
 		}
@@ -426,20 +427,53 @@ func isWhitespace(c byte) bool {
 	return c == ' ' || c == '\t' || c == '\n' || c == '\r'
 }
 
-// parseDuration parses duration strings like "500ms", "2s", "5m"
+// parseDuration parses duration strings like "500ms", "2s", "5m", "100us", "1000ns"
+// Accepts: ns (nanoseconds), us (microseconds), ms (milliseconds), s (seconds), m (minutes), h (hours)
+// Also supports complex durations like "1h30m" via Go's parser
 func parseDuration(s string) (time.Duration, error) {
-	// Handle simple cases
-	if strings.HasSuffix(s, "ms") {
-		val := strings.TrimSuffix(s, "ms")
-		ms, err := strconv.ParseInt(val, 10, 64)
-		if err != nil {
-			return 0, err
-		}
-		return time.Duration(ms) * time.Millisecond, nil
+	// Handle all time units explicitly for better control
+	// Supports both integer and float values: "5s", "5.5s", "100ms", etc.
+
+	var multiplier time.Duration
+	var suffix string
+
+	if strings.HasSuffix(s, "ns") {
+		suffix = "ns"
+		multiplier = time.Nanosecond
+	} else if strings.HasSuffix(s, "us") {
+		suffix = "us"
+		multiplier = time.Microsecond
+	} else if strings.HasSuffix(s, "ms") {
+		suffix = "ms"
+		multiplier = time.Millisecond
+	} else if strings.HasSuffix(s, "s") {
+		suffix = "s"
+		multiplier = time.Second
+	} else if strings.HasSuffix(s, "m") {
+		suffix = "m"
+		multiplier = time.Minute
+	} else if strings.HasSuffix(s, "h") {
+		suffix = "h"
+		multiplier = time.Hour
+	} else {
+		// No recognized suffix, fall back to Go's parser for complex formats like "1h30m"
+		return time.ParseDuration(s)
 	}
 
-	// Use Go's duration parser for other formats
-	return time.ParseDuration(s)
+	// Extract the numeric part
+	valStr := strings.TrimSuffix(s, suffix)
+	valStr = strings.TrimSpace(valStr)
+
+	// Try to parse as float to support decimal values like "1.5s"
+	val, err := strconv.ParseFloat(valStr, 64)
+	if err != nil {
+		// Parsing failed - might be a complex duration like "1h30m"
+		// Fall back to Go's parser
+		return time.ParseDuration(s)
+	}
+
+	// Convert to nanoseconds
+	return time.Duration(val * float64(multiplier)), nil
 }
 
 // normalizeSignalType converts various signal type representations to a canonical SignalType
