@@ -1,24 +1,48 @@
 # OTEL-OQL
 
-A multi-tenant OpenTelemetry data ingestion and query service with OQL (Observability Query Language) support, backed by Apache Pinot.
+A multi-tenant OpenTelemetry data ingestion and query service with OQL (Observability Query Language) support, backed by Apache Pinot with Kafka streaming.
 
 ## Features
 
 - **OTLP Data Ingestion**: Receive metrics, logs, and traces via gRPC (port 4317) and HTTP (port 4318)
 - **Multi-Tenant Isolation**: Enforce strict tenant separation with mandatory tenant-id
 - **OQL Query Language**: Powerful query language for cross-signal correlation and debugging
-- **Apache Pinot Storage**: Scalable backend with tenant-partitioned tables
-- **Exemplar Support**: Jump from aggregated metrics to specific traces
+- **Apache Pinot Storage**: Scalable REALTIME tables backed by Kafka streaming
+- **Exemplar Support**: Jump from aggregated metrics to specific traces (the "wormhole")
+- **MCP Server**: Model Context Protocol server for AI tool integration (port 8090)
+- **CLI Query Tool**: Interactive command-line client for executing OQL queries
+- **Self-Observability**: OpenTelemetry instrumentation for traces and metrics
 
 ## Quick Start
 
 ### Prerequisites
 
 - Go 1.21 or later
-- Apache Pinot instance running and accessible
+- Podman and podman-compose (or Docker/Docker Compose)
 - All dependencies must use Apache 2.0 license
 
-### Build
+### Automated Setup (Recommended)
+
+Use the setup scripts for quick environment setup:
+
+```bash
+# Start infrastructure (Kafka + Pinot)
+podman-compose up -d
+
+# Wait for services to be ready, then run automated setup
+./scripts/setup-all.sh
+
+# Verify the setup
+./scripts/verify-setup.sh
+```
+
+This will:
+- Create Kafka topics (otel-spans, otel-metrics, otel-logs)
+- Initialize Pinot REALTIME tables
+- Verify all services are running
+- Insert test data
+
+### Manual Setup
 
 ```bash
 # Build the main service
@@ -26,13 +50,8 @@ go build -o otel-oql ./cmd/otel-oql
 
 # Build the CLI query tool
 go build -o oql-cli ./cmd/oql-cli
-```
 
-### Setup Pinot Schema
-
-Before running the service, initialize the Pinot tables:
-
-```bash
+# Setup Pinot schema
 ./otel-oql setup-schema --pinot-url=http://localhost:9000
 ```
 
