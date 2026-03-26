@@ -7,6 +7,7 @@ A multi-tenant OpenTelemetry data ingestion and query service with OQL (Observab
 - **OTLP Data Ingestion**: Receive metrics, logs, and traces via gRPC (port 4317) and HTTP (port 4318)
 - **Multi-Tenant Isolation**: Enforce strict tenant separation with mandatory tenant-id
 - **OQL Query Language**: Powerful query language for cross-signal correlation and debugging
+- **PromQL Support**: Query metrics using Prometheus Query Language (NEW!)
 - **Apache Pinot Storage**: Scalable REALTIME tables backed by Kafka streaming
 - **Exemplar Support**: Jump from aggregated metrics to specific traces (the "wormhole")
 - **MCP Server**: Model Context Protocol server for AI tool integration (port 8090)
@@ -211,6 +212,119 @@ filter attribute.error = true
 - `logs` - Discrete log events
 - `spans` - Individual trace spans
 - `traces` - Alias for spans
+
+## PromQL Support
+
+OTEL-OQL now supports PromQL (Prometheus Query Language) for querying metrics! Use your existing Prometheus queries with OTEL-OQL.
+
+### Query via HTTP API
+
+```bash
+curl -X POST http://localhost:8080/query \
+  -H 'X-Tenant-ID: 0' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "query": "http_requests_total{job=\"api\", status=\"200\"}",
+    "language": "promql"
+  }'
+```
+
+### PromQL Examples
+
+#### Instant Vector Selectors
+
+```promql
+# Query metric with labels
+http_requests_total{job="api", status="200"}
+
+# Regex label matching
+http_requests_total{job=~"api.*"}
+
+# Negative matching
+http_requests_total{status!="500"}
+```
+
+#### Range Vector Selectors
+
+```promql
+# Last 5 minutes of data
+http_requests_total{job="api"}[5m]
+
+# Last 1 hour of data
+cpu_usage{service="backend"}[1h]
+```
+
+#### Aggregations
+
+```promql
+# Sum all requests
+sum(http_requests_total)
+
+# Sum by label (GROUP BY)
+sum by (job) (http_requests_total)
+
+# Sum by multiple labels
+sum by (job, status) (http_requests_total)
+
+# Other aggregations
+avg(cpu_usage)
+min(response_time)
+max(response_time)
+count(http_requests_total)
+```
+
+#### Rate Functions
+
+```promql
+# Requests per second over 5 minutes
+rate(http_requests_total[5m])
+
+# Instantaneous rate
+irate(cpu_usage[1m])
+```
+
+#### Value Comparisons
+
+```promql
+# Filter by value
+cpu_usage > 80
+memory_usage < 50
+disk_usage >= 90
+
+# Equal/not equal
+status_code == 200
+status_code != 500
+```
+
+### Supported PromQL Features
+
+✅ **Supported**:
+- Instant vector selectors with label matchers
+- Range vector selectors with time ranges
+- Label matcher operators: `=`, `!=`, `=~`, `!~`
+- Aggregation functions: `sum()`, `avg()`, `min()`, `max()`, `count()`
+- Grouping: `by (label1, label2)`
+- Rate functions: `rate()`, `irate()`
+- Comparison operators: `>`, `<`, `>=`, `<=`, `==`, `!=`
+
+❌ **Not Yet Supported**:
+- Binary operations between metrics (`metric1 / metric2`)
+- Subqueries
+- Advanced functions (`histogram_quantile`, `predict_linear`)
+- Recording rules and alerts
+
+### When to Use PromQL vs OQL
+
+**Use PromQL when**:
+- Querying metrics only
+- Existing Grafana dashboards use PromQL
+- Team is familiar with Prometheus
+
+**Use OQL when**:
+- Cross-signal queries (correlate metrics with traces/logs)
+- Using `expand trace`, `get_exemplars()`, or `correlate`
+- Need to jump from metrics to traces via exemplars
+- Debugging complex issues across multiple signal types
 
 ## Multi-Tenancy
 

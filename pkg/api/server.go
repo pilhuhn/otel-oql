@@ -11,6 +11,7 @@ import (
 	"github.com/pilhuhn/otel-oql/pkg/observability"
 	"github.com/pilhuhn/otel-oql/pkg/oql"
 	"github.com/pilhuhn/otel-oql/pkg/pinot"
+	"github.com/pilhuhn/otel-oql/pkg/promql"
 	"github.com/pilhuhn/otel-oql/pkg/sqlutil"
 	"github.com/pilhuhn/otel-oql/pkg/tenant"
 	"github.com/pilhuhn/otel-oql/pkg/translator"
@@ -65,9 +66,20 @@ func (s *Server) Stop(ctx context.Context) error {
 	return nil
 }
 
+// QueryLanguage represents the query language type
+type QueryLanguage string
+
+const (
+	QueryLanguageOQL      QueryLanguage = "oql"      // default
+	QueryLanguagePromQL   QueryLanguage = "promql"
+	QueryLanguageLogQL    QueryLanguage = "logql"
+	QueryLanguageTraceQL  QueryLanguage = "traceql"
+)
+
 // QueryRequest represents a query request
 type QueryRequest struct {
-	Query string `json:"query"`
+	Query    string        `json:"query"`
+	Language QueryLanguage `json:"language,omitempty"` // defaults to oql
 }
 
 // QueryResponse represents a query response
@@ -121,23 +133,51 @@ func (s *Server) handleQuery(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Parse OQL query
-	parser := oql.NewParser(req.Query)
-	query, err := parser.Parse()
-	if err != nil {
-		s.obs.RecordError(ctx, "parse_failure", "api_server")
-		s.obs.RecordRequest(ctx, "/query", time.Since(start), http.StatusBadRequest)
-		s.sendErrorResponse(w, fmt.Sprintf("failed to parse query: %v", err))
-		return
+	// Route to appropriate query handler based on language
+	var sqlQueries []string
+	var queryLang string
+	var err error
+
+	switch req.Language {
+	case QueryLanguagePromQL:
+		queryLang = "promql"
+		sqlQueries, err = s.executePromQLQuery(ctx, req.Query, tenantID)
+	case QueryLanguageLogQL:
+		queryLang = "logql"
+		sqlQueries, err = s.executeLogQLQuery(ctx, req.Query, tenantID)
+	case QueryLanguageTraceQL:
+		queryLang = "traceql"
+		sqlQueries, err = s.executeTraceQLQuery(ctx, req.Query, tenantID)
+	case QueryLanguageOQL, "":
+		queryLang = "oql"
+		sqlQueries, err = s.executeOQLQuery(ctx, req.Query, tenantID)
+	default:
+		// Handle string literals for backward compatibility
+		switch string(req.Language) {
+		case "promql":
+			queryLang = "promql"
+			sqlQueries, err = s.executePromQLQuery(ctx, req.Query, tenantID)
+		case "logql":
+			queryLang = "logql"
+			sqlQueries, err = s.executeLogQLQuery(ctx, req.Query, tenantID)
+		case "traceql":
+			queryLang = "traceql"
+			sqlQueries, err = s.executeTraceQLQuery(ctx, req.Query, tenantID)
+		case "oql":
+			queryLang = "oql"
+			sqlQueries, err = s.executeOQLQuery(ctx, req.Query, tenantID)
+		default:
+			s.obs.RecordError(ctx, "unsupported_language", "api_server")
+			s.obs.RecordRequest(ctx, "/query", time.Since(start), http.StatusBadRequest)
+			http.Error(w, fmt.Sprintf("unsupported query language: %s", req.Language), http.StatusBadRequest)
+			return
+		}
 	}
 
-	// Translate to SQL
-	trans := translator.NewTranslator(tenantID)
-	sqlQueries, err := trans.TranslateQuery(query)
 	if err != nil {
-		s.obs.RecordError(ctx, "translation_failure", "api_server")
+		s.obs.RecordError(ctx, "query_processing_failure", "api_server")
 		s.obs.RecordRequest(ctx, "/query", time.Since(start), http.StatusBadRequest)
-		s.sendErrorResponse(w, fmt.Sprintf("failed to translate query: %v", err))
+		s.sendErrorResponse(w, err.Error())
 		return
 	}
 
@@ -183,7 +223,7 @@ func (s *Server) handleQuery(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Record query metrics
-	s.obs.RecordQuery(ctx, "oql", time.Since(start), querySuccess)
+	s.obs.RecordQuery(ctx, queryLang, time.Since(start), querySuccess)
 	s.obs.RecordRequest(ctx, "/query", time.Since(start), http.StatusOK)
 
 	// Send response
@@ -577,4 +617,45 @@ func filterTenantID(result *QueryResult) {
 		newRows[i] = newRow
 	}
 	result.Rows = newRows
+}
+
+// executeOQLQuery handles OQL query execution (existing logic extracted)
+func (s *Server) executeOQLQuery(ctx context.Context, query string, tenantID int) ([]string, error) {
+	// Parse OQL query
+	parser := oql.NewParser(query)
+	parsedQuery, err := parser.Parse()
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse OQL query: %w", err)
+	}
+
+	// Translate to SQL
+	trans := translator.NewTranslator(tenantID)
+	sqlQueries, err := trans.TranslateQuery(parsedQuery)
+	if err != nil {
+		return nil, fmt.Errorf("failed to translate OQL query: %w", err)
+	}
+
+	return sqlQueries, nil
+}
+
+// executePromQLQuery handles PromQL query execution
+func (s *Server) executePromQLQuery(ctx context.Context, query string, tenantID int) ([]string, error) {
+	translator := promql.NewTranslator(tenantID)
+	sqlQueries, err := translator.TranslateQuery(query)
+	if err != nil {
+		return nil, fmt.Errorf("PromQL translation error: %w", err)
+	}
+	return sqlQueries, nil
+}
+
+// executeLogQLQuery handles LogQL query execution
+func (s *Server) executeLogQLQuery(ctx context.Context, query string, tenantID int) ([]string, error) {
+	// TODO: Implement LogQL support
+	return nil, fmt.Errorf("LogQL support not yet implemented")
+}
+
+// executeTraceQLQuery handles TraceQL query execution
+func (s *Server) executeTraceQLQuery(ctx context.Context, query string, tenantID int) ([]string, error) {
+	// TODO: Implement TraceQL support
+	return nil, fmt.Errorf("TraceQL support not yet implemented")
 }
