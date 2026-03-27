@@ -71,12 +71,47 @@ func TestQueryLanguageRouting(t *testing.T) {
 			errContain: "parse error",
 		},
 		{
-			name: "LogQL query (not yet implemented)",
+			name: "LogQL query - simple stream selector",
 			execFunc: func() ([]string, error) {
 				return s.executeLogQLQuery(ctx, "{job=\"varlogs\"}", tenantID)
 			},
+			wantErr: false,
+		},
+		{
+			name: "LogQL query - with line filter",
+			execFunc: func() ([]string, error) {
+				return s.executeLogQLQuery(ctx, "{job=\"varlogs\"} |= \"error\"", tenantID)
+			},
+			wantErr: false,
+		},
+		{
+			name: "LogQL query - count_over_time",
+			execFunc: func() ([]string, error) {
+				return s.executeLogQLQuery(ctx, "count_over_time({job=\"varlogs\"}[5m])", tenantID)
+			},
+			wantErr: false,
+		},
+		{
+			name: "LogQL query - bytes_over_time",
+			execFunc: func() ([]string, error) {
+				return s.executeLogQLQuery(ctx, "bytes_over_time({job=\"varlogs\"}[5m])", tenantID)
+			},
+			wantErr: false,
+		},
+		{
+			name: "LogQL query - aggregation",
+			execFunc: func() ([]string, error) {
+				return s.executeLogQLQuery(ctx, "sum by (level) (count_over_time({job=\"varlogs\"}[5m]))", tenantID)
+			},
+			wantErr: false,
+		},
+		{
+			name: "LogQL query - invalid syntax",
+			execFunc: func() ([]string, error) {
+				return s.executeLogQLQuery(ctx, "{job=\"varlogs\"", tenantID)
+			},
 			wantErr:    true,
-			errContain: "not yet implemented",
+			errContain: "unclosed stream selector",
 		},
 		{
 			name: "TraceQL query (not yet implemented)",

@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/pilhuhn/otel-oql/pkg/logql"
 	"github.com/pilhuhn/otel-oql/pkg/observability"
 	"github.com/pilhuhn/otel-oql/pkg/oql"
 	"github.com/pilhuhn/otel-oql/pkg/pinot"
@@ -650,8 +651,12 @@ func (s *Server) executePromQLQuery(ctx context.Context, query string, tenantID 
 
 // executeLogQLQuery handles LogQL query execution
 func (s *Server) executeLogQLQuery(ctx context.Context, query string, tenantID int) ([]string, error) {
-	// TODO: Implement LogQL support
-	return nil, fmt.Errorf("LogQL support not yet implemented")
+	translator := logql.NewTranslator(tenantID)
+	sqlQueries, err := translator.TranslateQuery(query)
+	if err != nil {
+		return nil, fmt.Errorf("LogQL translation error: %w", err)
+	}
+	return sqlQueries, nil
 }
 
 // executeTraceQLQuery handles TraceQL query execution
