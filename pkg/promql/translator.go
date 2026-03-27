@@ -69,6 +69,11 @@ func (t *Translator) translateExpr(expr parser.Expr) (string, error) {
 // translateVectorSelector translates an instant vector selector
 // Example: http_requests_total{job="api", status="200"}
 func (t *Translator) translateVectorSelector(vs *parser.VectorSelector) (string, error) {
+	// Check for unsupported features
+	if vs.OriginalOffset != 0 {
+		return "", fmt.Errorf("offset modifier not supported (offset %v)", vs.OriginalOffset)
+	}
+
 	// Start with base query
 	sql := fmt.Sprintf("SELECT * FROM otel_metrics WHERE tenant_id = %d", t.tenantID)
 
@@ -164,6 +169,11 @@ func (t *Translator) translateLabelMatcher(matcher *labels.Matcher) (string, err
 // translateAggregate translates an aggregation expression
 // Example: sum(http_requests_total) or sum by (service) (http_requests_total)
 func (t *Translator) translateAggregate(ae *parser.AggregateExpr) (string, error) {
+	// Check if inner expression is another aggregation (nested aggregations not supported)
+	if _, ok := ae.Expr.(*parser.AggregateExpr); ok {
+		return "", fmt.Errorf("nested aggregations not supported: %s(%s(...))", ae.Op, ae.Op)
+	}
+
 	// First translate the inner expression to get base query
 	baseSQL, err := t.translateExpr(ae.Expr)
 	if err != nil {
@@ -286,6 +296,10 @@ func (t *Translator) translateRateFunction(call *parser.Call) (string, error) {
 
 	matrixSel, ok := call.Args[0].(*parser.MatrixSelector)
 	if !ok {
+		// Check if it's a subquery
+		if _, isSubquery := call.Args[0].(*parser.SubqueryExpr); isSubquery {
+			return "", fmt.Errorf("subqueries not supported")
+		}
 		return "", fmt.Errorf("rate() requires a range vector argument")
 	}
 
