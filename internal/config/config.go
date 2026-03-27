@@ -35,6 +35,12 @@ type Config struct {
 	ObservabilityEnabled  bool   `yaml:"observability_enabled"`  // Enable self-observability
 	ObservabilityEndpoint string `yaml:"observability_endpoint"` // OTLP gRPC endpoint (default: localhost:4317)
 	ObservabilityTenantID string `yaml:"observability_tenant_id"` // Tenant ID for self-observability (default: "0" in test mode)
+
+	// Debug logging
+	Debug             bool `yaml:"debug"`               // Enable debug logging
+	DebugIngestion    bool `yaml:"debug_ingestion"`     // Debug logging for data ingestion
+	DebugQuery        bool `yaml:"debug_query"`         // Debug logging for query execution
+	DebugTranslation  bool `yaml:"debug_translation"`   // Debug logging for query translation
 }
 
 // Load reads configuration from config file, environment variables, and command-line flags
@@ -57,6 +63,10 @@ func Load() (*Config, error) {
 	var obsEnabled bool
 	var obsEndpoint string
 	var obsTenantID string
+	var debug bool
+	var debugIngestion bool
+	var debugQuery bool
+	var debugTranslation bool
 
 	flag.StringVar(&pinotURL, "pinot-url", "", "Apache Pinot broker URL")
 	flag.StringVar(&kafkaBrokers, "kafka-brokers", "", "Kafka broker addresses")
@@ -68,6 +78,10 @@ func Load() (*Config, error) {
 	flag.BoolVar(&obsEnabled, "observability-enabled", false, "Enable self-observability")
 	flag.StringVar(&obsEndpoint, "observability-endpoint", "", "OTLP endpoint for self-observability")
 	flag.StringVar(&obsTenantID, "observability-tenant-id", "", "Tenant ID for self-observability")
+	flag.BoolVar(&debug, "debug", false, "Enable debug logging (all components)")
+	flag.BoolVar(&debugIngestion, "debug-ingestion", false, "Enable debug logging for data ingestion")
+	flag.BoolVar(&debugQuery, "debug-query", false, "Enable debug logging for query execution")
+	flag.BoolVar(&debugTranslation, "debug-translation", false, "Enable debug logging for query translation")
 
 	flag.Parse()
 
@@ -119,6 +133,26 @@ func Load() (*Config, error) {
 	if env := os.Getenv("OBSERVABILITY_TENANT_ID"); env != "" {
 		cfg.ObservabilityTenantID = env
 	}
+	if env := os.Getenv("DEBUG"); env != "" {
+		if val, err := strconv.ParseBool(env); err == nil {
+			cfg.Debug = val
+		}
+	}
+	if env := os.Getenv("DEBUG_INGESTION"); env != "" {
+		if val, err := strconv.ParseBool(env); err == nil {
+			cfg.DebugIngestion = val
+		}
+	}
+	if env := os.Getenv("DEBUG_QUERY"); env != "" {
+		if val, err := strconv.ParseBool(env); err == nil {
+			cfg.DebugQuery = val
+		}
+	}
+	if env := os.Getenv("DEBUG_TRANSLATION"); env != "" {
+		if val, err := strconv.ParseBool(env); err == nil {
+			cfg.DebugTranslation = val
+		}
+	}
 
 	// 3. Override with CLI flags (if provided)
 	if pinotURL != "" {
@@ -152,6 +186,26 @@ func Load() (*Config, error) {
 	}
 	if obsTenantID != "" {
 		cfg.ObservabilityTenantID = obsTenantID
+	}
+	// Debug flags
+	if flag.Lookup("debug").Value.String() == "true" {
+		cfg.Debug = true
+	}
+	if flag.Lookup("debug-ingestion").Value.String() == "true" {
+		cfg.DebugIngestion = true
+	}
+	if flag.Lookup("debug-query").Value.String() == "true" {
+		cfg.DebugQuery = true
+	}
+	if flag.Lookup("debug-translation").Value.String() == "true" {
+		cfg.DebugTranslation = true
+	}
+
+	// If global debug is enabled, enable all debug flags
+	if cfg.Debug {
+		cfg.DebugIngestion = true
+		cfg.DebugQuery = true
+		cfg.DebugTranslation = true
 	}
 
 	// Apply defaults if still not set

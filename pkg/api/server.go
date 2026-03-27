@@ -20,20 +20,24 @@ import (
 
 // Server is the OQL query API server
 type Server struct {
-	port         int
-	validator    *tenant.Validator
-	pinotClient  *pinot.Client
-	httpServer   *http.Server
-	obs          *observability.Observability
+	port              int
+	validator         *tenant.Validator
+	pinotClient       *pinot.Client
+	httpServer        *http.Server
+	obs               *observability.Observability
+	debugQuery        bool
+	debugTranslation  bool
 }
 
 // NewServer creates a new query API server
-func NewServer(port int, validator *tenant.Validator, pinotClient *pinot.Client, obs *observability.Observability) *Server {
+func NewServer(port int, validator *tenant.Validator, pinotClient *pinot.Client, obs *observability.Observability, debugQuery, debugTranslation bool) *Server {
 	return &Server{
-		port:        port,
-		validator:   validator,
-		pinotClient: pinotClient,
-		obs:         obs,
+		port:             port,
+		validator:        validator,
+		pinotClient:      pinotClient,
+		obs:              obs,
+		debugQuery:       debugQuery,
+		debugTranslation: debugTranslation,
 	}
 }
 
@@ -301,7 +305,9 @@ func (s *Server) executeExpandQuery(ctx context.Context, sql string, tenantID in
 	tableName := tableAndEnd[:len(tableAndEnd)-len(expandSuffix)]
 
 	// Step 1: Execute base query to get trace_ids
-	fmt.Printf("DEBUG EXPAND: Executing base query to get trace_ids\n")
+	if s.debugQuery {
+		fmt.Printf("[DEBUG QUERY] EXPAND: Executing base query to get trace_ids\n")
+	}
 	resp1, err := s.pinotClient.Query(ctx, baseSQL)
 	if err != nil {
 		// Pass through the Pinot error (already user-friendly)
@@ -360,7 +366,9 @@ func (s *Server) executeExpandQuery(ctx context.Context, sql string, tenantID in
 		join(traceIDs, ", "),
 	)
 
-	fmt.Printf("DEBUG EXPAND: Executing expand query with %d trace_ids\n", len(traceIDs))
+	if s.debugQuery {
+		fmt.Printf("[DEBUG QUERY] EXPAND: Executing expand query with %d trace_ids\n", len(traceIDs))
+	}
 
 	// Step 4: Execute the expand query
 	resp2, err := s.pinotClient.Query(ctx, expandSQL)
@@ -452,7 +460,9 @@ func (s *Server) executeCorrelateQuery(ctx context.Context, sql string, tenantID
 	currentTable := rest[:len(rest)-len(correlateSuffix)]
 
 	// Step 1: Execute base query to get trace_ids
-	fmt.Printf("DEBUG CORRELATE: Executing base query to get trace_ids\n")
+	if s.debugQuery {
+		fmt.Printf("[DEBUG QUERY] CORRELATE: Executing base query to get trace_ids\n")
+	}
 	resp1, err := s.pinotClient.Query(ctx, baseSQL)
 	if err != nil {
 		// Pass through the Pinot error (already user-friendly)
@@ -531,11 +541,15 @@ func (s *Server) executeCorrelateQuery(ctx context.Context, sql string, tenantID
 			traceIDsIN,
 		)
 
-		fmt.Printf("DEBUG CORRELATE: Executing query for signal %s\n", signal)
+		if s.debugQuery {
+			fmt.Printf("[DEBUG QUERY] CORRELATE: Executing query for signal %s\n", signal)
+		}
 
 		resp, err := s.pinotClient.Query(ctx, correlateSQL)
 		if err != nil {
-			fmt.Printf("DEBUG CORRELATE: Failed to query %s: %v\n", signal, err)
+			if s.debugQuery {
+				fmt.Printf("[DEBUG QUERY] CORRELATE: Failed to query %s: %v\n", signal, err)
+			}
 			continue // Skip this signal but continue with others
 		}
 
@@ -641,21 +655,51 @@ func (s *Server) executeOQLQuery(ctx context.Context, query string, tenantID int
 
 // executePromQLQuery handles PromQL query execution
 func (s *Server) executePromQLQuery(ctx context.Context, query string, tenantID int) ([]string, error) {
+	if s.debugQuery {
+		fmt.Printf("[DEBUG QUERY] PromQL query received (tenant_id=%d): %s\n", tenantID, query)
+	}
+
 	translator := promql.NewTranslator(tenantID)
 	sqlQueries, err := translator.TranslateQuery(query)
 	if err != nil {
+		if s.debugQuery {
+			fmt.Printf("[DEBUG QUERY] PromQL translation failed: %v\n", err)
+		}
 		return nil, fmt.Errorf("PromQL translation error: %w", err)
 	}
+
+	if s.debugTranslation {
+		fmt.Printf("[DEBUG TRANSLATION] PromQL query translated to %d SQL statements:\n", len(sqlQueries))
+		for i, sql := range sqlQueries {
+			fmt.Printf("[DEBUG TRANSLATION]   [%d] %s\n", i+1, sql)
+		}
+	}
+
 	return sqlQueries, nil
 }
 
 // executeLogQLQuery handles LogQL query execution
 func (s *Server) executeLogQLQuery(ctx context.Context, query string, tenantID int) ([]string, error) {
+	if s.debugQuery {
+		fmt.Printf("[DEBUG QUERY] LogQL query received (tenant_id=%d): %s\n", tenantID, query)
+	}
+
 	translator := logql.NewTranslator(tenantID)
 	sqlQueries, err := translator.TranslateQuery(query)
 	if err != nil {
+		if s.debugQuery {
+			fmt.Printf("[DEBUG QUERY] LogQL translation failed: %v\n", err)
+		}
 		return nil, fmt.Errorf("LogQL translation error: %w", err)
 	}
+
+	if s.debugTranslation {
+		fmt.Printf("[DEBUG TRANSLATION] LogQL query translated to %d SQL statements:\n", len(sqlQueries))
+		for i, sql := range sqlQueries {
+			fmt.Printf("[DEBUG TRANSLATION]   [%d] %s\n", i+1, sql)
+		}
+	}
+
 	return sqlQueries, nil
 }
 

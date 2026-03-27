@@ -23,3 +23,10 @@ test_mode: true
 observability_enabled: false  # Set to true to enable self-observability
 observability_endpoint: "localhost:4317"  # OTLP gRPC endpoint for self-observability
 observability_tenant_id: "0"  # Tenant ID for self-observability data
+
+# Debug logging configuration
+# Enable debug logging for specific components (or all components with debug: true)
+debug: false               # Enable all debug logging (overrides specific flags)
+debug_ingestion: false     # Debug logging for data ingestion (OTLP receivers)
+debug_query: false         # Debug logging for query execution (incoming queries)
+debug_translation: false   # Debug logging for query translation (OQL/PromQL/LogQL to SQL)
