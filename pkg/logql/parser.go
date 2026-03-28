@@ -21,6 +21,16 @@ func NewParser(input string) *Parser {
 
 // Parse parses the LogQL query
 func (p *Parser) Parse() (*Query, error) {
+	// First try to parse with Prometheus parser to detect scalar arithmetic
+	// This handles connection tests like vector(1)+vector(1)
+	expr, err := parser.ParseExpr(p.input)
+	if err == nil {
+		// Check if it's a scalar arithmetic expression
+		if scalarExpr, ok := p.tryParseScalarExpr(expr); ok {
+			return &Query{Expr: scalarExpr}, nil
+		}
+	}
+
 	// Check if this is a metric query (starts with aggregation function)
 	// Examples: count_over_time({...}[5m]), sum by (level) (count_over_time({...}[5m]))
 	if isMetricQuery(p.input) {
@@ -401,4 +411,64 @@ func isMetricQuery(query string) bool {
 	}
 
 	return false
+}
+// tryParseScalarExpr checks if the expression is a scalar arithmetic expression
+// This handles connection tests like vector(1)+vector(1) from Grafana
+func (p *Parser) tryParseScalarExpr(expr parser.Expr) (*ScalarExpr, bool) {
+	// Handle BinaryExpr (e.g., vector(1)+vector(1))
+	if be, ok := expr.(*parser.BinaryExpr); ok {
+		lhsVal, lhsOk := p.extractScalarValue(be.LHS)
+		rhsVal, rhsOk := p.extractScalarValue(be.RHS)
+
+		if lhsOk && rhsOk {
+			var result float64
+			switch be.Op {
+			case parser.ADD:
+				result = lhsVal + rhsVal
+			case parser.SUB:
+				result = lhsVal - rhsVal
+			case parser.MUL:
+				result = lhsVal * rhsVal
+			case parser.DIV:
+				if rhsVal == 0 {
+					return nil, false
+				}
+				result = lhsVal / rhsVal
+			default:
+				return nil, false
+			}
+			return &ScalarExpr{Value: result}, true
+		}
+	}
+
+	// Handle single scalar value (e.g., vector(1))
+	if val, ok := p.extractScalarValue(expr); ok {
+		return &ScalarExpr{Value: val}, true
+	}
+
+	return nil, false
+}
+
+// extractScalarValue extracts a scalar value from an expression
+func (p *Parser) extractScalarValue(expr parser.Expr) (float64, bool) {
+	// NumberLiteral: 1, 2.5, etc.
+	if num, ok := expr.(*parser.NumberLiteral); ok {
+		return num.Val, true
+	}
+
+	// Call expression: vector(1)
+	if call, ok := expr.(*parser.Call); ok {
+		if call.Func.Name == "vector" && len(call.Args) == 1 {
+			if arg, ok := call.Args[0].(*parser.NumberLiteral); ok {
+				return arg.Val, true
+			}
+		}
+	}
+
+	// ParenExpr: unwrap parentheses
+	if paren, ok := expr.(*parser.ParenExpr); ok {
+		return p.extractScalarValue(paren.Expr)
+	}
+
+	return 0, false
 }

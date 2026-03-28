@@ -46,6 +46,10 @@ func (t *Translator) TranslateQuery(logql string) ([]string, error) {
 		}
 		return []string{sql}, nil
 
+	case *ScalarExpr:
+		sql := t.translateScalarExpr(expr)
+		return []string{sql}, nil
+
 	default:
 		return nil, fmt.Errorf("unsupported LogQL expression type: %T", expr)
 	}
@@ -278,4 +282,12 @@ func (t *Translator) applyAggregation(baseSQL string, agg *Aggregator) (string, 
 	sql += " GROUP BY " + strings.Join(groupFields, ", ")
 
 	return sql, nil
+}
+
+// translateScalarExpr translates a scalar expression to SQL
+// This handles connection tests like vector(1)+vector(1) from Grafana
+func (t *Translator) translateScalarExpr(expr *ScalarExpr) string {
+	// Return a SQL query that produces this scalar value
+	// Pinot requires a FROM clause, so we use otel_logs with LIMIT 1
+	return fmt.Sprintf("SELECT %f AS value FROM otel_logs LIMIT 1", expr.Value)
 }

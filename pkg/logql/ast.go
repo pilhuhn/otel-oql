@@ -34,6 +34,13 @@ type MetricExpr struct {
 
 func (MetricExpr) expr() {}
 
+// ScalarExpr represents a scalar arithmetic expression (e.g., vector(1)+vector(1) for connection tests)
+type ScalarExpr struct {
+	Value float64 // The computed scalar value
+}
+
+func (ScalarExpr) expr() {}
+
 // StreamSelector represents {label="value", label2=~"regex"}
 type StreamSelector struct {
 	Matchers []*labels.Matcher

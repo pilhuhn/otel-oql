@@ -377,3 +377,72 @@ func TestTranslateQuery_EdgeCases(t *testing.T) {
 		})
 	}
 }
+
+func TestTranslateQuery_ScalarExpr(t *testing.T) {
+	tests := []struct {
+		name    string
+		logql   string
+		wantSQL string
+		wantErr bool
+	}{
+		{
+			name:    "vector addition - Grafana connection test",
+			logql:   `vector(1)+vector(1)`,
+			wantSQL: `SELECT 2.000000 AS value FROM otel_logs LIMIT 1`,
+		},
+		{
+			name:    "vector subtraction",
+			logql:   `vector(5)-vector(3)`,
+			wantSQL: `SELECT 2.000000 AS value FROM otel_logs LIMIT 1`,
+		},
+		{
+			name:    "vector multiplication",
+			logql:   `vector(3)*vector(4)`,
+			wantSQL: `SELECT 12.000000 AS value FROM otel_logs LIMIT 1`,
+		},
+		{
+			name:    "vector division",
+			logql:   `vector(10)/vector(2)`,
+			wantSQL: `SELECT 5.000000 AS value FROM otel_logs LIMIT 1`,
+		},
+		{
+			name:    "simple number addition",
+			logql:   `1+1`,
+			wantSQL: `SELECT 2.000000 AS value FROM otel_logs LIMIT 1`,
+		},
+		{
+			name:    "single vector value",
+			logql:   `vector(42)`,
+			wantSQL: `SELECT 42.000000 AS value FROM otel_logs LIMIT 1`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			translator := NewTranslator(0)
+			sqls, err := translator.TranslateQuery(tt.logql)
+
+			if tt.wantErr {
+				if err == nil {
+					t.Errorf("expected error, got nil")
+					return
+				}
+				return
+			}
+
+			if err != nil {
+				t.Errorf("unexpected error: %v", err)
+				return
+			}
+
+			if len(sqls) != 1 {
+				t.Errorf("expected 1 SQL query, got %d", len(sqls))
+				return
+			}
+
+			if sqls[0] != tt.wantSQL {
+				t.Errorf("SQL mismatch:\ngot:  %s\nwant: %s", sqls[0], tt.wantSQL)
+			}
+		})
+	}
+}
