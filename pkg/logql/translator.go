@@ -90,7 +90,7 @@ func (t *Translator) translateLogRangeExpr(expr *LogRangeExpr) (string, error) {
 	if t.start != nil && t.end != nil {
 		startMillis := t.start.UnixMilli()
 		endMillis := t.end.UnixMilli()
-		sql += fmt.Sprintf(" AND timestamp >= %d AND timestamp <= %d", startMillis, endMillis)
+		sql += fmt.Sprintf(" AND \"timestamp\" >= %d AND \"timestamp\" <= %d", startMillis, endMillis)
 	}
 
 	return sql, nil
@@ -126,7 +126,7 @@ func (t *Translator) translateMetricExpr(expr *MetricExpr) (string, error) {
 		// Use explicit time range from API parameters
 		startMillis := t.start.UnixMilli()
 		endMillis := t.end.UnixMilli()
-		sql += fmt.Sprintf(" AND timestamp >= %d AND timestamp <= %d", startMillis, endMillis)
+		sql += fmt.Sprintf(" AND \"timestamp\" >= %d AND \"timestamp\" <= %d", startMillis, endMillis)
 	} else if expr.Range > 0 {
 		// Use relative time range from query (reuse common code!)
 		timeFilter := common.TranslateTimeRange(expr.Range)

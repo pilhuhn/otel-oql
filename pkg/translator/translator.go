@@ -460,7 +460,7 @@ func (t *Translator) translateSince(since *oql.SinceOp) (string, error) {
 		millis := d.Milliseconds()
 
 		// Use Pinot's timestamp functions
-		sql := fmt.Sprintf("timestamp >= (now() - %d)", millis)
+		sql := fmt.Sprintf("\"timestamp\" >= (now() - %d)", millis)
 		return sql, nil
 	}
 
@@ -476,7 +476,7 @@ func (t *Translator) translateSince(since *oql.SinceOp) (string, error) {
 	}
 
 	millis := ts.UnixMilli()
-	sql := fmt.Sprintf("timestamp >= %d", millis)
+	sql := fmt.Sprintf("\"timestamp\" >= %d", millis)
 	return sql, nil
 }
 
@@ -503,6 +503,6 @@ func (t *Translator) translateBetween(between *oql.BetweenOp) (string, error) {
 	startMillis := startTime.UnixMilli()
 	endMillis := endTime.UnixMilli()
 
-	sql := fmt.Sprintf("timestamp >= %d AND timestamp <= %d", startMillis, endMillis)
+	sql := fmt.Sprintf("\"timestamp\" >= %d AND \"timestamp\" <= %d", startMillis, endMillis)
 	return sql, nil
 }

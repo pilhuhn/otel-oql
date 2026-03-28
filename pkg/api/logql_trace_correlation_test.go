@@ -88,7 +88,7 @@ func TestLogQLTraceCorrelation(t *testing.T) {
 				"SELECT trace_id, COUNT(*) FROM otel_logs",
 				"WHERE tenant_id = 0",
 				"AND service_name = 'api'",
-				"AND timestamp >= (now() - 3600000)",
+				"AND \"timestamp\" >= (now() - 3600000)",
 				"GROUP BY trace_id",
 			},
 			description: "aggregate logs by trace_id",
