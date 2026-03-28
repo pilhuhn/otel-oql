@@ -1275,8 +1275,34 @@ func getColumnWidths(columns []string) []int {
 		// Use display name for width calculation
 		displayName := getDisplayColumnName(col)
 		widths[i] = len(displayName)
-		if widths[i] < 10 {
-			widths[i] = 10
+
+		// Set appropriate minimum widths based on column type
+		minWidth := 10 // default minimum
+		switch col {
+		case "metric_name":
+			minWidth = 35 // Metric names can be long (e.g., "jvm.threads.daemon.count")
+		case "timestamp":
+			minWidth = 24 // Full timestamp: "2026-03-28T10:30:45.123Z"
+		case "trace_id":
+			minWidth = 32 // UUID-style trace IDs
+		case "span_id", "parent_span_id":
+			minWidth = 16 // Span IDs
+		case "name":
+			minWidth = 25 // Span/operation names
+		case "body":
+			minWidth = 50 // Log message bodies
+		case "service_name", "host_name":
+			minWidth = 20 // Service/host names
+		case "exemplar_trace_id":
+			minWidth = 32 // Exemplar trace IDs
+		case "value":
+			minWidth = 15 // Metric values (including scientific notation)
+		case "duration":
+			minWidth = 12 // Span durations
+		}
+
+		if widths[i] < minWidth {
+			widths[i] = minWidth
 		}
 	}
 	return widths
