@@ -319,6 +319,11 @@ func getLogsSchema() *PinotSchema {
 			{Name: "log_level", DataType: "STRING"},
 			{Name: "log_source", DataType: "STRING"},
 
+			// Prometheus/Loki common labels - extracted for performance
+			{Name: "job", DataType: "STRING"},
+			{Name: "instance", DataType: "STRING"},
+			{Name: "environment", DataType: "STRING"},
+
 			// Flexible attributes
 			{Name: "attributes", DataType: "JSON"},
 			{Name: "resource_attributes", DataType: "JSON"},
@@ -364,7 +369,7 @@ func getLogsTableConfig() *TableConfig {
 		},
 		TableIndexConfig: &TableIndexConfig{
 			LoadMode:             "MMAP",
-			InvertedIndexColumns: []string{"tenant_id", "trace_id", "severity_text", "service_name"},
+			InvertedIndexColumns: []string{"tenant_id", "trace_id", "span_id", "severity_text", "service_name", "log_level", "job", "instance", "environment"},
 			JsonIndexColumns:     []string{"attributes", "resource_attributes"},
 			RangeIndexColumns:    []string{"timestamp", "severity_number"},
 			StreamConfigs: map[string]string{

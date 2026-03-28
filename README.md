@@ -6,11 +6,15 @@ A multi-tenant OpenTelemetry data ingestion and query service with OQL (Observab
 
 - **OTLP Data Ingestion**: Receive metrics, logs, and traces via gRPC (port 4317) and HTTP (port 4318)
 - **Multi-Tenant Isolation**: Enforce strict tenant separation with mandatory tenant-id
-- **OQL Query Language**: Powerful query language for cross-signal correlation and debugging
+- **Multi-Language Query Support**:
+  - **OQL** - Native query language for cross-signal correlation and debugging
+  - **PromQL** - Prometheus Query Language for metrics (100% parser reuse)
+  - **LogQL** - Loki Query Language for logs with native column optimization (10-100x faster)
+  - **TraceQL** - Planned (Phase 3) - Tempo Query Language for traces
 - **Apache Pinot Storage**: Scalable REALTIME tables backed by Kafka streaming
 - **Exemplar Support**: Jump from aggregated metrics to specific traces (the "wormhole")
 - **MCP Server**: Model Context Protocol server for AI tool integration (port 8090)
-- **CLI Query Tool**: Interactive command-line client for executing OQL queries
+- **CLI Query Tool**: Interactive command-line client for executing queries in any language
 - **Self-Observability**: OpenTelemetry instrumentation for traces and metrics
 
 ## Quick Start
@@ -211,6 +215,278 @@ filter attribute.error = true
 - `logs` - Discrete log events
 - `spans` - Individual trace spans
 - `traces` - Alias for spans
+
+## PromQL Support
+
+OTEL-OQL now supports PromQL (Prometheus Query Language) for querying metrics! Use your existing Prometheus queries with OTEL-OQL.
+
+### Query via HTTP API
+
+```bash
+curl -X POST http://localhost:8080/query \
+  -H 'X-Tenant-ID: 0' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "query": "http_requests_total{job=\"api\", status=\"200\"}",
+    "language": "promql"
+  }'
+```
+
+### PromQL Examples
+
+#### Instant Vector Selectors
+
+```promql
+# Query metric with labels
+http_requests_total{job="api", status="200"}
+
+# Regex label matching
+http_requests_total{job=~"api.*"}
+
+# Negative matching
+http_requests_total{status!="500"}
+```
+
+#### Range Vector Selectors
+
+```promql
+# Last 5 minutes of data
+http_requests_total{job="api"}[5m]
+
+# Last 1 hour of data
+cpu_usage{service="backend"}[1h]
+```
+
+#### Aggregations
+
+```promql
+# Sum all requests
+sum(http_requests_total)
+
+# Sum by label (GROUP BY)
+sum by (job) (http_requests_total)
+
+# Sum by multiple labels
+sum by (job, status) (http_requests_total)
+
+# Other aggregations
+avg(cpu_usage)
+min(response_time)
+max(response_time)
+count(http_requests_total)
+```
+
+#### Rate Functions
+
+```promql
+# Requests per second over 5 minutes
+rate(http_requests_total[5m])
+
+# Instantaneous rate
+irate(cpu_usage[1m])
+```
+
+#### Value Comparisons
+
+```promql
+# Filter by value
+cpu_usage > 80
+memory_usage < 50
+disk_usage >= 90
+
+# Equal/not equal
+status_code == 200
+status_code != 500
+```
+
+### Supported PromQL Features
+
+✅ **Supported**:
+- Instant vector selectors with label matchers
+- Range vector selectors with time ranges
+- Label matcher operators: `=`, `!=`, `=~`, `!~`
+- Aggregation functions: `sum()`, `avg()`, `min()`, `max()`, `count()`
+- Grouping: `by (label1, label2)`
+- Rate functions: `rate()`, `irate()`
+- Comparison operators: `>`, `<`, `>=`, `<=`, `==`, `!=`
+
+❌ **Not Yet Supported**:
+- Binary operations between metrics (`metric1 / metric2`)
+- Subqueries
+- Advanced functions (`histogram_quantile`, `predict_linear`)
+- Recording rules and alerts
+
+### When to Use PromQL vs OQL
+
+**Use PromQL when**:
+- Querying metrics only
+- Existing Grafana dashboards use PromQL
+- Team is familiar with Prometheus
+
+**Use OQL when**:
+- Cross-signal queries (correlate metrics with traces/logs)
+- Using `expand trace`, `get_exemplars()`, or `correlate`
+- Need to jump from metrics to traces via exemplars
+- Debugging complex issues across multiple signal types
+
+## LogQL Support
+
+OTEL-OQL now supports LogQL (Loki Query Language) for querying logs! Use your existing Loki queries with OTEL-OQL.
+
+### Query via HTTP API
+
+```bash
+curl -X POST http://localhost:8080/query \
+  -H 'X-Tenant-ID: 0' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "query": "{job=\"varlogs\"} |= \"error\"",
+    "language": "logql"
+  }'
+```
+
+### LogQL Examples
+
+#### Stream Selectors
+
+```logql
+# Query logs by label
+{job="varlogs"}
+
+# Multiple label matchers
+{job="varlogs", level="error"}
+
+# Regex label matching
+{job=~"var.*"}
+
+# Negative matching
+{job="varlogs", level!="debug"}
+
+# Negative regex
+{job="varlogs", level!~"debug.*"}
+```
+
+#### Line Filters
+
+```logql
+# Contains text
+{job="varlogs"} |= "error"
+
+# Does not contain
+{job="varlogs"} != "debug"
+
+# Regex match
+{job="varlogs"} |~ "error|fail"
+
+# Regex not match
+{job="varlogs"} !~ "debug|trace"
+
+# Multiple filters
+{job="varlogs"} |= "error" != "timeout"
+```
+
+#### Label Parsers
+
+```logql
+# Parse JSON logs
+{job="varlogs"} | json
+
+# Parse logfmt logs
+{job="varlogs"} | logfmt
+
+# Parse and filter
+{job="varlogs"} | json |= "error"
+```
+
+#### Metric Queries
+
+```logql
+# Count log lines over time
+count_over_time({job="varlogs"}[5m])
+
+# Count with filters
+count_over_time({job="varlogs"} |= "error"[5m])
+
+# Rate of log lines per second
+rate({job="varlogs"}[5m])
+
+# Total bytes over time
+bytes_over_time({job="varlogs"}[5m])
+
+# Bytes per second
+bytes_rate({job="varlogs"}[10m])
+```
+
+#### Aggregations
+
+```logql
+# Sum all counts
+sum(count_over_time({job="varlogs"}[5m]))
+
+# Sum by label (GROUP BY)
+sum by (level) (count_over_time({job="varlogs"}[5m]))
+
+# Sum by multiple labels
+sum by (level, service) (count_over_time({job="varlogs"}[5m]))
+
+# Other aggregations
+avg(count_over_time({job="varlogs"}[5m]))
+min by (service) (count_over_time({job="varlogs"}[5m]))
+max by (level) (count_over_time({job="varlogs"}[5m]))
+count(count_over_time({job="varlogs"}[5m]))
+```
+
+#### Complete Examples
+
+```logql
+# Find error logs in the last 5 minutes
+{job="varlogs", level="error"}[5m]
+
+# Count errors per service
+sum by (service) (count_over_time({level="error"}[1h]))
+
+# Find database errors (case-insensitive pattern)
+{job="varlogs"} |~ "(?i)database.*error"
+
+# Count rate of application logs excluding debug
+rate({job="app"} != "debug"[5m])
+
+# Total bytes of error logs by level
+sum by (level) (bytes_over_time({job="varlogs"} |= "error"[1h]))
+```
+
+### Supported LogQL Features
+
+✅ **Supported**:
+- Stream selectors with label matchers
+- Label matcher operators: `=`, `!=`, `=~`, `!~`
+- Line filter operators: `|=`, `!=`, `|~`, `!~`
+- Label parsers: `| json`, `| logfmt`, `| pattern`, `| regexp`
+- Metric functions: `count_over_time()`, `rate()`, `bytes_over_time()`, `bytes_rate()`
+- Aggregation functions: `sum()`, `avg()`, `min()`, `max()`, `count()`
+- Grouping: `by (label1, label2)`, `without (label1)`
+- Time ranges: `[5m]`, `[1h]`, `[24h]`
+- Native column mapping (job, level, service, environment, etc.)
+
+❌ **Not Yet Supported**:
+- Label filters after parsing (`| label="value"`)
+- Format expressions (`| line_format`, `| label_format`)
+- Unwrap expressions for extracting numeric values
+- Advanced metric functions (`quantile_over_time`, `stddev_over_time`)
+
+### When to Use LogQL vs OQL
+
+**Use LogQL when**:
+- Querying logs only
+- Existing Grafana Loki dashboards use LogQL
+- Team is familiar with Loki
+- Need log-specific features like line filters and parsers
+
+**Use OQL when**:
+- Cross-signal queries (correlate logs with traces/metrics)
+- Using `expand trace` to see full request flow
+- Need to correlate log entries with specific traces
+- Debugging complex issues across multiple signal types
 
 ## Multi-Tenancy
 

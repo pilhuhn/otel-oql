@@ -14,12 +14,13 @@ import (
 
 // Ingester handles data ingestion to Kafka
 type Ingester struct {
-	producer sarama.SyncProducer
-	obs      *observability.Observability
+	producer       sarama.SyncProducer
+	obs            *observability.Observability
+	debugIngestion bool
 }
 
 // NewIngester creates a new ingester with Kafka producer
-func NewIngester(kafkaBrokers string, obs *observability.Observability) (*Ingester, error) {
+func NewIngester(kafkaBrokers string, obs *observability.Observability, debugIngestion bool) (*Ingester, error) {
 	config := sarama.NewConfig()
 	config.Producer.Return.Successes = true
 	config.Producer.RequiredAcks = sarama.WaitForLocal
@@ -32,8 +33,9 @@ func NewIngester(kafkaBrokers string, obs *observability.Observability) (*Ingest
 	}
 
 	return &Ingester{
-		producer: producer,
-		obs:      obs,
+		producer:       producer,
+		obs:            obs,
+		debugIngestion: debugIngestion,
 	}, nil
 }
 
@@ -63,9 +65,9 @@ func (i *Ingester) IngestTraces(ctx context.Context, tenantID int, traces ptrace
 				attrs := span.Attributes().AsRaw()
 
 				// Debug: log all attributes
-				if len(attrs) > 0 {
+				if i.debugIngestion && len(attrs) > 0 {
 					attrsJSON, _ := json.Marshal(attrs)
-					fmt.Printf("DEBUG INGESTION: Span %s attributes: %s\n", span.Name(), string(attrsJSON))
+					fmt.Printf("[DEBUG INGESTION] Span %s attributes: %s\n", span.Name(), string(attrsJSON))
 				}
 
 				// Determine error status from span status code
@@ -83,8 +85,10 @@ func (i *Ingester) IngestTraces(ctx context.Context, tenantID int, traces ptrace
 					httpMethod = extractString(attrs, "http.request.method")
 				}
 
-				fmt.Printf("DEBUG INGESTION: Span %s - error=%v, http_status=%v, http_method=%v\n",
-					span.Name(), isError, httpStatusCode, httpMethod)
+				if i.debugIngestion {
+					fmt.Printf("[DEBUG INGESTION] Span %s - error=%v, http_status=%v, http_method=%v\n",
+						span.Name(), isError, httpStatusCode, httpMethod)
+				}
 
 				record := map[string]interface{}{
 					"tenant_id":      tenantID,
@@ -123,21 +127,29 @@ func (i *Ingester) IngestTraces(ctx context.Context, tenantID int, traces ptrace
 	}
 
 	if len(records) == 0 {
-		fmt.Println("DEBUG INGESTER: No spans to ingest")
+		if i.debugIngestion {
+			fmt.Println("[DEBUG INGESTION] No spans to ingest")
+		}
 		return nil
 	}
 
-	fmt.Printf("DEBUG INGESTER: Publishing %d span records to Kafka\n", len(records))
+	if i.debugIngestion {
+		fmt.Printf("[DEBUG INGESTION] Publishing %d span records to Kafka\n", len(records))
+	}
 
 	// Publish records to Kafka
 	for _, record := range records {
 		payload, err := json.Marshal(record)
 		if err != nil {
-			fmt.Printf("DEBUG INGESTER: Failed to marshal span: %v\n", err)
+			if i.debugIngestion {
+				fmt.Printf("[DEBUG INGESTION] Failed to marshal span: %v\n", err)
+			}
 			return fmt.Errorf("failed to marshal span record: %w", err)
 		}
 
-		fmt.Printf("DEBUG INGESTER: Marshaled span record, %d bytes\n", len(payload))
+		if i.debugIngestion {
+			fmt.Printf("[DEBUG INGESTION] Marshaled span record, %d bytes\n", len(payload))
+		}
 
 		msg := &sarama.ProducerMessage{
 			Topic: "otel-spans",
@@ -146,13 +158,19 @@ func (i *Ingester) IngestTraces(ctx context.Context, tenantID int, traces ptrace
 
 		partition, offset, err := i.producer.SendMessage(msg)
 		if err != nil {
-			fmt.Printf("DEBUG INGESTER: Failed to send to Kafka: %v\n", err)
+			if i.debugIngestion {
+				fmt.Printf("[DEBUG INGESTION] Failed to send to Kafka: %v\n", err)
+			}
 			return fmt.Errorf("failed to send span to Kafka: %w", err)
 		}
-		fmt.Printf("DEBUG INGESTER: Sent to Kafka partition=%d offset=%d\n", partition, offset)
+		if i.debugIngestion {
+			fmt.Printf("[DEBUG INGESTION] Sent to Kafka partition=%d offset=%d\n", partition, offset)
+		}
 	}
 
-	fmt.Printf("DEBUG INGESTER: Successfully published %d spans to Kafka\n", len(records))
+	if i.debugIngestion {
+		fmt.Printf("[DEBUG INGESTION] Successfully published %d spans to Kafka\n", len(records))
+	}
 
 	// Record observability metrics
 	i.obs.RecordIngestion(ctx, "spans", int64(len(records)))
@@ -192,17 +210,23 @@ func (i *Ingester) IngestMetrics(ctx context.Context, tenantID int, metrics pmet
 	}
 
 	if len(records) == 0 {
-		fmt.Println("DEBUG INGESTER: No metrics to ingest")
+		if i.debugIngestion {
+			fmt.Println("[DEBUG INGESTION] No metrics to ingest")
+		}
 		return nil
 	}
 
-	fmt.Printf("DEBUG INGESTER: Publishing %d metric records to Kafka\n", len(records))
+	if i.debugIngestion {
+		fmt.Printf("[DEBUG INGESTION] Publishing %d metric records to Kafka\n", len(records))
+	}
 
 	// Publish records to Kafka
 	for _, record := range records {
 		payload, err := json.Marshal(record)
 		if err != nil {
-			fmt.Printf("DEBUG INGESTER: Failed to marshal metric: %v\n", err)
+			if i.debugIngestion {
+				fmt.Printf("[DEBUG INGESTION] Failed to marshal metric: %v\n", err)
+			}
 			return fmt.Errorf("failed to marshal metric record: %w", err)
 		}
 
@@ -213,13 +237,19 @@ func (i *Ingester) IngestMetrics(ctx context.Context, tenantID int, metrics pmet
 
 		partition, offset, err := i.producer.SendMessage(msg)
 		if err != nil {
-			fmt.Printf("DEBUG INGESTER: Failed to send metric to Kafka: %v\n", err)
+			if i.debugIngestion {
+				fmt.Printf("[DEBUG INGESTION] Failed to send metric to Kafka: %v\n", err)
+			}
 			return fmt.Errorf("failed to send metric to Kafka: %w", err)
 		}
-		fmt.Printf("DEBUG INGESTER: Sent metric to Kafka partition=%d offset=%d\n", partition, offset)
+		if i.debugIngestion {
+			fmt.Printf("[DEBUG INGESTION] Sent metric to Kafka partition=%d offset=%d\n", partition, offset)
+		}
 	}
 
-	fmt.Printf("DEBUG INGESTER: Successfully published %d metrics to Kafka\n", len(records))
+	if i.debugIngestion {
+		fmt.Printf("[DEBUG INGESTION] Successfully published %d metrics to Kafka\n", len(records))
+	}
 
 	// Record observability metrics
 	i.obs.RecordIngestion(ctx, "metrics", int64(len(records)))
@@ -272,17 +302,23 @@ func (i *Ingester) IngestLogs(ctx context.Context, tenantID int, logs plog.Logs)
 	}
 
 	if len(records) == 0 {
-		fmt.Println("DEBUG INGESTER: No logs to ingest")
+		if i.debugIngestion {
+			fmt.Println("[DEBUG INGESTION] No logs to ingest")
+		}
 		return nil
 	}
 
-	fmt.Printf("DEBUG INGESTER: Publishing %d log records to Kafka\n", len(records))
+	if i.debugIngestion {
+		fmt.Printf("[DEBUG INGESTION] Publishing %d log records to Kafka\n", len(records))
+	}
 
 	// Publish records to Kafka
 	for _, record := range records {
 		payload, err := json.Marshal(record)
 		if err != nil {
-			fmt.Printf("DEBUG INGESTER: Failed to marshal log: %v\n", err)
+			if i.debugIngestion {
+				fmt.Printf("[DEBUG INGESTION] Failed to marshal log: %v\n", err)
+			}
 			return fmt.Errorf("failed to marshal log record: %w", err)
 		}
 
@@ -293,13 +329,19 @@ func (i *Ingester) IngestLogs(ctx context.Context, tenantID int, logs plog.Logs)
 
 		partition, offset, err := i.producer.SendMessage(msg)
 		if err != nil {
-			fmt.Printf("DEBUG INGESTER: Failed to send log to Kafka: %v\n", err)
+			if i.debugIngestion {
+				fmt.Printf("[DEBUG INGESTION] Failed to send log to Kafka: %v\n", err)
+			}
 			return fmt.Errorf("failed to send log to Kafka: %w", err)
 		}
-		fmt.Printf("DEBUG INGESTER: Sent log to Kafka partition=%d offset=%d\n", partition, offset)
+		if i.debugIngestion {
+			fmt.Printf("[DEBUG INGESTION] Sent log to Kafka partition=%d offset=%d\n", partition, offset)
+		}
 	}
 
-	fmt.Printf("DEBUG INGESTER: Successfully published %d logs to Kafka\n", len(records))
+	if i.debugIngestion {
+		fmt.Printf("[DEBUG INGESTION] Successfully published %d logs to Kafka\n", len(records))
+	}
 
 	// Record observability metrics
 	i.obs.RecordIngestion(ctx, "logs", int64(len(records)))

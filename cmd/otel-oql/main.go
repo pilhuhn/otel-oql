@@ -87,18 +87,18 @@ func run() error {
 	validator := tenant.NewValidator(cfg.TestMode)
 
 	// Initialize ingester (with Kafka)
-	ingester, err := ingestion.NewIngester(cfg.KafkaBrokers, obs)
+	ingester, err := ingestion.NewIngester(cfg.KafkaBrokers, obs, cfg.DebugIngestion)
 	if err != nil {
 		return fmt.Errorf("failed to create ingester: %w", err)
 	}
 	defer ingester.Close()
 
 	// Initialize receivers
-	grpcReceiver := receiver.NewGRPCReceiver(cfg.OTLPGRPCPort, validator, ingester, obs)
-	httpReceiver := receiver.NewHTTPReceiver(cfg.OTLPHTTPPort, validator, ingester, obs)
+	grpcReceiver := receiver.NewGRPCReceiver(cfg.OTLPGRPCPort, validator, ingester, obs, cfg.DebugIngestion)
+	httpReceiver := receiver.NewHTTPReceiver(cfg.OTLPHTTPPort, validator, ingester, obs, cfg.DebugIngestion)
 
 	// Initialize query API server
-	queryServer := api.NewServer(cfg.QueryAPIPort, validator, pinotClient, obs)
+	queryServer := api.NewServer(cfg.QueryAPIPort, validator, pinotClient, obs, cfg.DebugQuery, cfg.DebugTranslation)
 
 	// Initialize MCP server
 	mcpServer := mcp.NewServer(cfg.MCPPort, pinotClient)
