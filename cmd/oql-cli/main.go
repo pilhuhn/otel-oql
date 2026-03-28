@@ -95,7 +95,11 @@ func main() {
 
 // runInteractiveMode runs the CLI in interactive REPL mode
 func runInteractiveMode(endpoint, tenantID string, verbose, jsonOutput, allFields bool) {
-	fmt.Fprintf(os.Stderr, "OQL Interactive Shell (type 'help' for examples, 'undo' to remove last refinement, 'exit' or Ctrl+D to quit)\n\n")
+	fmt.Fprintf(os.Stderr, "OQL Interactive Shell\n")
+	fmt.Fprintf(os.Stderr, "  Type 'help' for query examples\n")
+	fmt.Fprintf(os.Stderr, "  Type 'list metrics' to see available metrics\n")
+	fmt.Fprintf(os.Stderr, "  Type 'undo' to remove last refinement\n")
+	fmt.Fprintf(os.Stderr, "  Type 'exit' or Ctrl+D to quit\n\n")
 
 	scanner := bufio.NewScanner(os.Stdin)
 	var queryHistory []string // Stack of queries for undo
@@ -125,6 +129,12 @@ func runInteractiveMode(endpoint, tenantID string, verbose, jsonOutput, allField
 		// Check for help command
 		if strings.ToLower(input) == "help" {
 			showHelp()
+			continue
+		}
+
+		// Check for list commands
+		if strings.HasPrefix(strings.ToLower(input), "list ") {
+			handleListCommand(endpoint, tenantID, input)
 			continue
 		}
 
@@ -291,6 +301,12 @@ func runSingleQuery(endpoint, tenantID string, verbose, jsonOutput, allFields bo
 			showHelp()
 			os.Exit(0)
 		}
+
+		// Check for list commands
+		if strings.HasPrefix(strings.ToLower(query), "list ") {
+			handleListCommand(endpoint, tenantID, query)
+			os.Exit(0)
+		}
 	} else {
 		// Read from stdin (piped input)
 		query = readQueryInteractive()
@@ -301,6 +317,12 @@ func runSingleQuery(endpoint, tenantID string, verbose, jsonOutput, allFields bo
 		fmt.Fprintf(os.Stderr, "Error: query cannot be empty\n")
 		flag.Usage()
 		os.Exit(1)
+	}
+
+	// Check for list commands from stdin as well
+	if strings.HasPrefix(strings.ToLower(query), "list ") {
+		handleListCommand(endpoint, tenantID, query)
+		os.Exit(0)
 	}
 
 	// Execute query with retry on error
@@ -395,6 +417,11 @@ func showHelp() {
 	help := `
 OQL (Observability Query Language) Help
 ======================================
+
+DISCOVERY COMMANDS:
+  list metrics                   List all available metrics
+  list labels                    List all available labels
+  list values <label>            List values for a specific label
 
 BASIC SYNTAX:
   signal=<type> [operations...]
@@ -517,6 +544,154 @@ func executeQueryWithRetry(endpoint, tenantID, originalQuery string) (*QueryResp
 			return resp, nil
 		}
 	}
+}
+
+// handleListCommand handles "list" commands for discovering metrics and labels
+func handleListCommand(endpoint, tenantID, input string) {
+	parts := strings.Fields(input)
+	if len(parts) < 2 {
+		fmt.Fprintf(os.Stderr, "Usage: list <what>\n")
+		fmt.Fprintf(os.Stderr, "  list metrics              - List all available metrics\n")
+		fmt.Fprintf(os.Stderr, "  list labels               - List all available labels\n")
+		fmt.Fprintf(os.Stderr, "  list values <label>       - List values for a specific label\n")
+		return
+	}
+
+	command := strings.ToLower(parts[1])
+
+	switch command {
+	case "metrics":
+		// List metric names (special case of label values for __name__)
+		values, err := fetchLabelValues(endpoint, tenantID, "__name__", 1000)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			return
+		}
+		fmt.Println("\nAvailable metrics:")
+		for _, value := range values {
+			fmt.Printf("  %s\n", value)
+		}
+		fmt.Printf("\nTotal: %d metrics\n", len(values))
+
+	case "labels":
+		// List all labels
+		labels, err := fetchLabels(endpoint, tenantID)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			return
+		}
+		fmt.Println("\nAvailable labels:")
+		for _, label := range labels {
+			fmt.Printf("  %s\n", label)
+		}
+		fmt.Printf("\nTotal: %d labels\n", len(labels))
+
+	case "values":
+		// List values for a specific label
+		if len(parts) < 3 {
+			fmt.Fprintf(os.Stderr, "Usage: list values <label>\n")
+			fmt.Fprintf(os.Stderr, "Example: list values service_name\n")
+			return
+		}
+		labelName := parts[2]
+		values, err := fetchLabelValues(endpoint, tenantID, labelName, 1000)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			return
+		}
+		fmt.Printf("\nValues for label '%s':\n", labelName)
+		for _, value := range values {
+			fmt.Printf("  %s\n", value)
+		}
+		fmt.Printf("\nTotal: %d values\n", len(values))
+
+	default:
+		fmt.Fprintf(os.Stderr, "Unknown list command: %s\n", command)
+		fmt.Fprintf(os.Stderr, "Available commands: metrics, labels, values\n")
+	}
+}
+
+// PrometheusLabelsResponse represents the response from /api/v1/labels
+type PrometheusLabelsResponse struct {
+	Status string   `json:"status"`
+	Data   []string `json:"data"`
+	Error  string   `json:"error,omitempty"`
+}
+
+// fetchLabels fetches the list of available labels from the API
+func fetchLabels(endpoint, tenantID string) ([]string, error) {
+	url := endpoint + "/api/v1/labels"
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	req.Header.Set("X-Tenant-ID", tenantID)
+
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to execute request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(body))
+	}
+
+	var labelsResp PrometheusLabelsResponse
+	if err := json.Unmarshal(body, &labelsResp); err != nil {
+		return nil, fmt.Errorf("failed to parse response: %w", err)
+	}
+
+	if labelsResp.Error != "" {
+		return nil, fmt.Errorf("API error: %s", labelsResp.Error)
+	}
+
+	return labelsResp.Data, nil
+}
+
+// fetchLabelValues fetches the list of values for a specific label
+func fetchLabelValues(endpoint, tenantID, labelName string, limit int) ([]string, error) {
+	url := fmt.Sprintf("%s/api/v1/label/%s/values?limit=%d", endpoint, labelName, limit)
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	req.Header.Set("X-Tenant-ID", tenantID)
+
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to execute request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(body))
+	}
+
+	var valuesResp PrometheusLabelsResponse
+	if err := json.Unmarshal(body, &valuesResp); err != nil {
+		return nil, fmt.Errorf("failed to parse response: %w", err)
+	}
+
+	if valuesResp.Error != "" {
+		return nil, fmt.Errorf("API error: %s", valuesResp.Error)
+	}
+
+	return valuesResp.Data, nil
 }
 
 // executeQuery sends the query to the OTEL-OQL API
