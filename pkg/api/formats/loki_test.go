@@ -181,3 +181,57 @@ func TestToNanoseconds(t *testing.T) {
 		})
 	}
 }
+
+func TestTransformToLokiMatrix_ScalarResult(t *testing.T) {
+	// Scalar query like vector(1)+vector(1) - no timestamp column
+	results := []PinotResult{
+		{
+			Columns: []string{"value"},
+			Rows: [][]interface{}{
+				{2.0},
+			},
+		},
+	}
+
+	response := TransformToLokiMatrix(results)
+
+	if response.Status != "success" {
+		t.Errorf("expected status success, got %s", response.Status)
+	}
+
+	if response.Data == nil {
+		t.Fatal("expected data, got nil")
+	}
+
+	if response.Data.ResultType != "matrix" {
+		t.Errorf("expected resultType matrix, got %s", response.Data.ResultType)
+	}
+
+	if len(response.Data.Result) != 1 {
+		t.Fatalf("expected 1 result, got %d", len(response.Data.Result))
+	}
+
+	result := response.Data.Result[0]
+	if len(result.Values) != 1 {
+		t.Fatalf("expected 1 value, got %d", len(result.Values))
+	}
+
+	value := result.Values[0]
+	if len(value) != 2 {
+		t.Fatalf("expected [timestamp, value] pair, got %v", value)
+	}
+
+	// Check that value is 2.0
+	if value[1] != "2" {
+		t.Errorf("expected value 2, got %v", value[1])
+	}
+
+	// Check that timestamp is a valid Unix timestamp (roughly current time)
+	timestamp, ok := value[0].(int64)
+	if !ok {
+		t.Errorf("expected timestamp to be int64, got %T", value[0])
+	}
+	if timestamp < 1000000000 || timestamp > 2000000000 {
+		t.Errorf("expected timestamp to be reasonable Unix time, got %d", timestamp)
+	}
+}

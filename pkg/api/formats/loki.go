@@ -3,6 +3,7 @@ package formats
 import (
 	"fmt"
 	"strconv"
+	"time"
 )
 
 // LokiResponse represents a Loki API response
@@ -200,13 +201,8 @@ func TransformToLokiMatrix(results []PinotResult) LokiResponse {
 		}
 	}
 
-	if timestampIdx == -1 {
-		return LokiResponse{
-			Status:    "error",
-			ErrorType: "bad_data",
-			Error:     "missing 'timestamp' column in query results",
-		}
-	}
+	// Note: timestamp column is optional - for scalar queries (e.g., vector(1)+vector(1))
+	// we use the current time if no timestamp column is present
 
 	// Extract label columns
 	labelColumns := make([]string, 0)
@@ -245,7 +241,13 @@ func TransformToLokiMatrix(results []PinotResult) LokiResponse {
 		}
 
 		// Add data point [timestamp_seconds, value]
-		timestamp := toUnixSeconds(row[timestampIdx])
+		var timestamp int64
+		if timestampIdx != -1 && row[timestampIdx] != nil {
+			timestamp = toUnixSeconds(row[timestampIdx])
+		} else {
+			// For scalar queries without timestamp, use current time
+			timestamp = time.Now().Unix()
+		}
 		value := formatValue(row[valueIdx])
 
 		m.Values = append(m.Values, []interface{}{timestamp, value})
