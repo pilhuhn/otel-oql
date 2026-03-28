@@ -51,6 +51,8 @@ func (s *Server) Start(ctx context.Context) error {
 	// Prometheus-compatible endpoints
 	mux.Handle("/api/v1/query", s.validator.HTTPMiddleware(http.HandlerFunc(s.handlePrometheusQuery)))
 	mux.Handle("/api/v1/query_range", s.validator.HTTPMiddleware(http.HandlerFunc(s.handlePrometheusQueryRange)))
+	mux.Handle("/api/v1/labels", s.validator.HTTPMiddleware(http.HandlerFunc(s.handlePrometheusLabels)))
+	mux.HandleFunc("/api/v1/label/", s.validator.HTTPMiddleware(http.HandlerFunc(s.handlePrometheusLabelValues)).ServeHTTP)
 
 	// Loki-compatible endpoints
 	mux.Handle("/loki/api/v1/query", s.validator.HTTPMiddleware(http.HandlerFunc(s.handleLokiQuery)))

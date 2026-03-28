@@ -244,6 +244,77 @@ func PrometheusError(errorType, message string) PrometheusResponse {
 	}
 }
 
+// PrometheusLabelsResponse represents response for /api/v1/labels
+type PrometheusLabelsResponse struct {
+	Status    string   `json:"status"`
+	Data      []string `json:"data,omitempty"`
+	Error     string   `json:"error,omitempty"`
+	ErrorType string   `json:"errorType,omitempty"`
+}
+
+// TransformToPrometheusLabels transforms Pinot results to Prometheus labels response
+func TransformToPrometheusLabels(results []PinotResult) PrometheusLabelsResponse {
+	if len(results) == 0 {
+		return PrometheusLabelsResponse{
+			Status: "success",
+			Data:   []string{},
+		}
+	}
+
+	// For now, return a hardcoded list of common labels
+	// In production, this should query schema or extract from data
+	labels := []string{
+		"__name__",
+		"job",
+		"instance",
+		"service_name",
+		"host_name",
+		"environment",
+	}
+
+	return PrometheusLabelsResponse{
+		Status: "success",
+		Data:   labels,
+	}
+}
+
+// TransformToPrometheusLabelValues transforms Pinot results to Prometheus label values response
+func TransformToPrometheusLabelValues(results []PinotResult) PrometheusLabelsResponse {
+	if len(results) == 0 {
+		return PrometheusLabelsResponse{
+			Status: "success",
+			Data:   []string{},
+		}
+	}
+
+	result := results[0]
+	if len(result.Rows) == 0 {
+		return PrometheusLabelsResponse{
+			Status: "success",
+			Data:   []string{},
+		}
+	}
+
+	// Extract unique values from first column
+	values := make([]string, 0, len(result.Rows))
+	seen := make(map[string]bool)
+
+	for _, row := range result.Rows {
+		if len(row) > 0 && row[0] != nil {
+			value := fmt.Sprintf("%v", row[0])
+			if !seen[value] {
+				seen[value] = true
+				values = append(values, value)
+			}
+		}
+	}
+
+	return PrometheusLabelsResponse{
+		Status: "success",
+		Data:   values,
+	}
+}
+
 // Helper functions
 
 func findColumn(columns []string, name string) int {

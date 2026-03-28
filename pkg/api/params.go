@@ -42,6 +42,23 @@ type LokiRangeParams struct {
 	Direction string
 }
 
+// PrometheusLabelsParams represents parameters for /api/v1/labels
+type PrometheusLabelsParams struct {
+	Match []string  // Series selectors to filter which series to consider
+	Start time.Time // Start timestamp (optional)
+	End   time.Time // End timestamp (optional)
+	Limit int       // Max number of results (optional)
+}
+
+// PrometheusLabelValuesParams represents parameters for /api/v1/label/{name}/values
+type PrometheusLabelValuesParams struct {
+	LabelName string    // Name of the label (from URL path)
+	Match     []string  // Series selectors to filter
+	Start     time.Time // Start timestamp (optional)
+	End       time.Time // End timestamp (optional)
+	Limit     int       // Max number of results (optional)
+}
+
 // ParsePrometheusQueryParams parses parameters for /api/v1/query
 func ParsePrometheusQueryParams(r *http.Request) (*PrometheusQueryParams, error) {
 	if err := r.ParseForm(); err != nil {
@@ -301,4 +318,92 @@ func parseDuration(s string) (time.Duration, error) {
 	}
 
 	return 0, fmt.Errorf("invalid duration format: %s", s)
+}
+
+// ParsePrometheusLabelsParams parses parameters for /api/v1/labels
+func ParsePrometheusLabelsParams(r *http.Request) (*PrometheusLabelsParams, error) {
+	if err := r.ParseForm(); err != nil {
+		return nil, fmt.Errorf("failed to parse form: %w", err)
+	}
+
+	params := &PrometheusLabelsParams{}
+
+	// Parse match[] parameters (can be multiple)
+	if matches, ok := r.Form["match[]"]; ok {
+		params.Match = matches
+	}
+
+	// Parse optional start time
+	if startStr := r.FormValue("start"); startStr != "" {
+		start, err := parseTime(startStr)
+		if err != nil {
+			return nil, fmt.Errorf("invalid start parameter: %w", err)
+		}
+		params.Start = start
+	}
+
+	// Parse optional end time
+	if endStr := r.FormValue("end"); endStr != "" {
+		end, err := parseTime(endStr)
+		if err != nil {
+			return nil, fmt.Errorf("invalid end parameter: %w", err)
+		}
+		params.End = end
+	}
+
+	// Parse optional limit
+	if limitStr := r.FormValue("limit"); limitStr != "" {
+		limit, err := strconv.Atoi(limitStr)
+		if err != nil {
+			return nil, fmt.Errorf("invalid limit parameter: %w", err)
+		}
+		params.Limit = limit
+	}
+
+	return params, nil
+}
+
+// ParsePrometheusLabelValuesParams parses parameters for /api/v1/label/{name}/values
+func ParsePrometheusLabelValuesParams(r *http.Request, labelName string) (*PrometheusLabelValuesParams, error) {
+	if err := r.ParseForm(); err != nil {
+		return nil, fmt.Errorf("failed to parse form: %w", err)
+	}
+
+	params := &PrometheusLabelValuesParams{
+		LabelName: labelName,
+	}
+
+	// Parse match[] parameters (can be multiple)
+	if matches, ok := r.Form["match[]"]; ok {
+		params.Match = matches
+	}
+
+	// Parse optional start time
+	if startStr := r.FormValue("start"); startStr != "" {
+		start, err := parseTime(startStr)
+		if err != nil {
+			return nil, fmt.Errorf("invalid start parameter: %w", err)
+		}
+		params.Start = start
+	}
+
+	// Parse optional end time
+	if endStr := r.FormValue("end"); endStr != "" {
+		end, err := parseTime(endStr)
+		if err != nil {
+			return nil, fmt.Errorf("invalid end parameter: %w", err)
+		}
+		params.End = end
+	}
+
+	// Parse optional limit
+	if limitStr := r.FormValue("limit"); limitStr != "" {
+		limit, err := strconv.Atoi(limitStr)
+		if err != nil {
+			return nil, fmt.Errorf("invalid limit parameter: %w", err)
+		}
+		params.Limit = limit
+	}
+
+	return params, nil
 }

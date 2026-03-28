@@ -187,6 +187,187 @@ func (s *Server) executeQueries(ctx context.Context, sqlQueries []string) ([]Que
 	return results, nil
 }
 
+// handlePrometheusLabels handles GET/POST /api/v1/labels
+func (s *Server) handlePrometheusLabels(w http.ResponseWriter, r *http.Request) {
+	start := time.Now()
+	ctx, span := s.obs.Tracer().Start(r.Context(), "api.prometheus.labels")
+	defer span.End()
+
+	// Parse form parameters
+	params, err := ParsePrometheusLabelsParams(r)
+	if err != nil {
+		s.obs.RecordError(ctx, "invalid_params", "prometheus_api")
+		s.obs.RecordRequest(ctx, "/api/v1/labels", time.Since(start), http.StatusBadRequest)
+		writeJSON(w, http.StatusBadRequest, formats.PrometheusError("bad_data", err.Error()))
+		return
+	}
+
+	// Get tenant ID from context
+	tenantID, ok := tenant.FromContext(r.Context())
+	if !ok {
+		s.obs.RecordError(ctx, "missing_tenant_id", "prometheus_api")
+		s.obs.RecordRequest(ctx, "/api/v1/labels", time.Since(start), http.StatusUnauthorized)
+		writeJSON(w, http.StatusUnauthorized, formats.PrometheusError("bad_data", "tenant-id not found"))
+		return
+	}
+
+	if s.debugQuery {
+		fmt.Printf("[DEBUG QUERY] Prometheus labels query (tenant_id=%d, match=%v)\n", tenantID, params.Match)
+	}
+
+	// Build SQL to get distinct label names
+	sql := s.buildLabelsSQL(tenantID, params)
+
+	if s.debugTranslation {
+		fmt.Printf("[DEBUG TRANSLATION] Labels query SQL: %s\n", sql)
+	}
+
+	// Execute query against Pinot
+	results, err := s.executeQueries(ctx, []string{sql})
+	if err != nil {
+		s.obs.RecordError(ctx, "execution_error", "prometheus_api")
+		s.obs.RecordRequest(ctx, "/api/v1/labels", time.Since(start), http.StatusInternalServerError)
+		writeJSON(w, http.StatusInternalServerError, formats.PrometheusError("execution", fmt.Sprintf("query execution failed: %v", err)))
+		return
+	}
+
+	// Transform results to Prometheus format
+	pinotResults := make([]formats.PinotResult, 0, len(results))
+	for _, r := range results {
+		pinotResults = append(pinotResults, formats.PinotResult{
+			SQL:     r.SQL,
+			Columns: r.Columns,
+			Rows:    r.Rows,
+		})
+	}
+	response := formats.TransformToPrometheusLabels(pinotResults)
+
+	// Return response
+	s.obs.RecordRequest(ctx, "/api/v1/labels", time.Since(start), http.StatusOK)
+	writeJSON(w, http.StatusOK, response)
+}
+
+// handlePrometheusLabelValues handles GET/POST /api/v1/label/{name}/values
+func (s *Server) handlePrometheusLabelValues(w http.ResponseWriter, r *http.Request) {
+	start := time.Now()
+	ctx, span := s.obs.Tracer().Start(r.Context(), "api.prometheus.label_values")
+	defer span.End()
+
+	// Extract label name from URL path
+	// Path is /api/v1/label/{name}/values, so we need to extract {name}
+	path := r.URL.Path
+	// Remove prefix /api/v1/label/ and suffix /values
+	labelName := path[len("/api/v1/label/") : len(path)-len("/values")]
+
+	// Parse form parameters
+	params, err := ParsePrometheusLabelValuesParams(r, labelName)
+	if err != nil {
+		s.obs.RecordError(ctx, "invalid_params", "prometheus_api")
+		s.obs.RecordRequest(ctx, "/api/v1/label/values", time.Since(start), http.StatusBadRequest)
+		writeJSON(w, http.StatusBadRequest, formats.PrometheusError("bad_data", err.Error()))
+		return
+	}
+
+	// Get tenant ID from context
+	tenantID, ok := tenant.FromContext(r.Context())
+	if !ok {
+		s.obs.RecordError(ctx, "missing_tenant_id", "prometheus_api")
+		s.obs.RecordRequest(ctx, "/api/v1/label/values", time.Since(start), http.StatusUnauthorized)
+		writeJSON(w, http.StatusUnauthorized, formats.PrometheusError("bad_data", "tenant-id not found"))
+		return
+	}
+
+	if s.debugQuery {
+		fmt.Printf("[DEBUG QUERY] Prometheus label values query (tenant_id=%d, label=%s, match=%v)\n",
+			tenantID, labelName, params.Match)
+	}
+
+	// Build SQL to get distinct label values
+	sql := s.buildLabelValuesSQL(tenantID, params)
+
+	if s.debugTranslation {
+		fmt.Printf("[DEBUG TRANSLATION] Label values query SQL: %s\n", sql)
+	}
+
+	// Execute query against Pinot
+	results, err := s.executeQueries(ctx, []string{sql})
+	if err != nil {
+		s.obs.RecordError(ctx, "execution_error", "prometheus_api")
+		s.obs.RecordRequest(ctx, "/api/v1/label/values", time.Since(start), http.StatusInternalServerError)
+		writeJSON(w, http.StatusInternalServerError, formats.PrometheusError("execution", fmt.Sprintf("query execution failed: %v", err)))
+		return
+	}
+
+	// Transform results to Prometheus format
+	pinotResults := make([]formats.PinotResult, 0, len(results))
+	for _, r := range results {
+		pinotResults = append(pinotResults, formats.PinotResult{
+			SQL:     r.SQL,
+			Columns: r.Columns,
+			Rows:    r.Rows,
+		})
+	}
+	response := formats.TransformToPrometheusLabelValues(pinotResults)
+
+	// Return response
+	s.obs.RecordRequest(ctx, "/api/v1/label/values", time.Since(start), http.StatusOK)
+	writeJSON(w, http.StatusOK, response)
+}
+
+// buildLabelsSQL constructs SQL to get distinct label names
+func (s *Server) buildLabelsSQL(tenantID int, params *PrometheusLabelsParams) string {
+	// Get all column names from the schema (excluding system columns)
+	// For now, return a hardcoded list of common label columns
+	// In production, this should query the schema or use DESCRIBE TABLE
+	sql := fmt.Sprintf("SELECT DISTINCT metric_name FROM otel_metrics WHERE tenant_id = %d", tenantID)
+
+	// Add time range if provided
+	if !params.Start.IsZero() && !params.End.IsZero() {
+		sql += fmt.Sprintf(" AND \"timestamp\" >= %d AND \"timestamp\" <= %d",
+			params.Start.UnixMilli(), params.End.UnixMilli())
+	}
+
+	// TODO: Apply match[] filters if provided
+	// This requires parsing the PromQL selector and translating to SQL
+
+	if params.Limit > 0 {
+		sql += fmt.Sprintf(" LIMIT %d", params.Limit)
+	}
+
+	return sql
+}
+
+// buildLabelValuesSQL constructs SQL to get distinct values for a specific label
+func (s *Server) buildLabelValuesSQL(tenantID int, params *PrometheusLabelValuesParams) string {
+	var column string
+
+	// Special case: __name__ refers to metric_name
+	if params.LabelName == "__name__" {
+		column = "metric_name"
+	} else {
+		// Map label name to column name (use native columns where available)
+		// For now, use the label name directly
+		column = params.LabelName
+	}
+
+	sql := fmt.Sprintf("SELECT DISTINCT %s FROM otel_metrics WHERE tenant_id = %d AND %s IS NOT NULL",
+		column, tenantID, column)
+
+	// Add time range if provided
+	if !params.Start.IsZero() && !params.End.IsZero() {
+		sql += fmt.Sprintf(" AND \"timestamp\" >= %d AND \"timestamp\" <= %d",
+			params.Start.UnixMilli(), params.End.UnixMilli())
+	}
+
+	// TODO: Apply match[] filters if provided
+
+	if params.Limit > 0 {
+		sql += fmt.Sprintf(" LIMIT %d", params.Limit)
+	}
+
+	return sql
+}
+
 // writeJSON writes a JSON response
 func writeJSON(w http.ResponseWriter, statusCode int, data interface{}) {
 	w.Header().Set("Content-Type", "application/json")
