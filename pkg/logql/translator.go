@@ -3,6 +3,7 @@ package logql
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/pilhuhn/otel-oql/pkg/querylangs/common"
 	"github.com/pilhuhn/otel-oql/pkg/sqlutil"
@@ -11,6 +12,8 @@ import (
 // Translator translates LogQL queries to Pinot SQL
 type Translator struct {
 	tenantID int
+	start    *time.Time // Optional start time for range queries
+	end      *time.Time // Optional end time for range queries
 }
 
 // NewTranslator creates a new LogQL to SQL translator
@@ -48,6 +51,16 @@ func (t *Translator) TranslateQuery(logql string) ([]string, error) {
 	}
 }
 
+// TranslateQueryWithTimeRange translates a LogQL query to Pinot SQL with time range filter
+func (t *Translator) TranslateQueryWithTimeRange(logql string, start, end *time.Time) ([]string, error) {
+	// Store time range in translator
+	t.start = start
+	t.end = end
+
+	// Use regular translation
+	return t.TranslateQuery(logql)
+}
+
 // translateLogRangeExpr translates a log range query to SQL
 func (t *Translator) translateLogRangeExpr(expr *LogRangeExpr) (string, error) {
 	// Start with base query
@@ -71,6 +84,13 @@ func (t *Translator) translateLogRangeExpr(expr *LogRangeExpr) (string, error) {
 		if stageSQL != "" {
 			sql += " AND " + stageSQL
 		}
+	}
+
+	// Add time range filter if provided
+	if t.start != nil && t.end != nil {
+		startMillis := t.start.UnixMilli()
+		endMillis := t.end.UnixMilli()
+		sql += fmt.Sprintf(" AND timestamp >= %d AND timestamp <= %d", startMillis, endMillis)
 	}
 
 	return sql, nil
@@ -101,8 +121,14 @@ func (t *Translator) translateMetricExpr(expr *MetricExpr) (string, error) {
 		}
 	}
 
-	// Add time range filter (reuse common code!)
-	if expr.Range > 0 {
+	// Add time range filter
+	if t.start != nil && t.end != nil {
+		// Use explicit time range from API parameters
+		startMillis := t.start.UnixMilli()
+		endMillis := t.end.UnixMilli()
+		sql += fmt.Sprintf(" AND timestamp >= %d AND timestamp <= %d", startMillis, endMillis)
+	} else if expr.Range > 0 {
+		// Use relative time range from query (reuse common code!)
 		timeFilter := common.TranslateTimeRange(expr.Range)
 		sql += " AND " + timeFilter
 	}

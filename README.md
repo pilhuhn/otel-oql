@@ -81,6 +81,58 @@ Configuration via environment variables or command-line flags:
 | `--query-api-port` | `QUERY_API_PORT` | `8080` | Query API server port |
 | `--test-mode` | `TEST_MODE` | `false` | Enable test mode (tenant-id=0) |
 
+## Grafana Integration
+
+OTEL-OQL provides Prometheus and Loki-compatible API endpoints, enabling seamless integration with Grafana without requiring custom plugins.
+
+### Prometheus Datasource (Metrics)
+
+Configure OTEL-OQL as a Prometheus datasource:
+
+1. Add datasource in Grafana → Configuration → Data Sources
+2. Select **Prometheus**
+3. Set URL: `http://localhost:8080`
+4. Add custom HTTP header: `X-Tenant-ID: 0`
+5. Save & Test
+
+Use standard PromQL queries in your dashboards:
+
+```promql
+rate(http_requests_total{job="api"}[5m])
+sum by (service_name) (http_server_duration)
+```
+
+### Loki Datasource (Logs)
+
+Configure OTEL-OQL as a Loki datasource:
+
+1. Add datasource in Grafana → Configuration → Data Sources
+2. Select **Loki**
+3. Set URL: `http://localhost:8080`
+4. Add custom HTTP header: `X-Tenant-ID: 0`
+5. Save & Test
+
+Use standard LogQL queries in your dashboards:
+
+```logql
+{job="varlogs", level="error"} |= "timeout"
+sum by (level) (count_over_time({job="varlogs"}[5m]))
+```
+
+### API Endpoints
+
+OTEL-OQL exposes 4 Grafana-compatible endpoints:
+
+**Prometheus Endpoints** (for metrics):
+- `GET|POST /api/v1/query` - Instant queries
+- `GET|POST /api/v1/query_range` - Range queries
+
+**Loki Endpoints** (for logs):
+- `GET|POST /loki/api/v1/query` - Instant log queries
+- `GET|POST /loki/api/v1/query_range` - Range log queries
+
+For complete Grafana integration guide, dashboard import instructions, and troubleshooting, see [GRAFANA_INTEGRATION.md](./GRAFANA_INTEGRATION.md).
+
 ## OTLP Data Ingestion
 
 ### Send Traces (gRPC)

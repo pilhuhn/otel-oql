@@ -3,6 +3,7 @@ package promql
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/pilhuhn/otel-oql/pkg/sqlutil"
 	"github.com/prometheus/prometheus/model/labels"
@@ -12,6 +13,8 @@ import (
 // Translator translates PromQL queries to Pinot SQL
 type Translator struct {
 	tenantID int
+	start    *time.Time // Optional start time for range queries
+	end      *time.Time // Optional end time for range queries
 }
 
 // NewTranslator creates a new PromQL to SQL translator
@@ -34,6 +37,16 @@ func (t *Translator) TranslateQuery(promql string) ([]string, error) {
 	}
 
 	return []string{sql}, nil
+}
+
+// TranslateQueryWithTimeRange parses PromQL and translates to Pinot SQL with time range filter
+func (t *Translator) TranslateQueryWithTimeRange(promql string, start, end *time.Time) ([]string, error) {
+	// Store time range in translator
+	t.start = start
+	t.end = end
+
+	// Use regular translation
+	return t.TranslateQuery(promql)
 }
 
 // translateExpr translates Prometheus AST expressions to SQL
@@ -111,6 +124,13 @@ func (t *Translator) translateVectorSelector(vs *parser.VectorSelector) (string,
 		sql += " AND " + condition
 	}
 
+	// Add time range filter if provided
+	if t.start != nil && t.end != nil {
+		startMillis := t.start.UnixMilli()
+		endMillis := t.end.UnixMilli()
+		sql += fmt.Sprintf(" AND timestamp >= %d AND timestamp <= %d", startMillis, endMillis)
+	}
+
 	return sql, nil
 }
 
@@ -123,14 +143,32 @@ func (t *Translator) translateMatrixSelector(ms *parser.MatrixSelector) (string,
 		return "", fmt.Errorf("matrix selector does not contain a vector selector")
 	}
 
+	// Temporarily clear time range to avoid double-applying in translateVectorSelector
+	start := t.start
+	end := t.end
+	t.start = nil
+	t.end = nil
+
 	sql, err := t.translateVectorSelector(vs)
 	if err != nil {
 		return "", err
 	}
 
+	// Restore time range
+	t.start = start
+	t.end = end
+
 	// Add time range filter
-	rangeMillis := ms.Range.Milliseconds()
-	sql += fmt.Sprintf(" AND timestamp >= (now() - %d)", rangeMillis)
+	if t.start != nil && t.end != nil {
+		// Use explicit time range
+		startMillis := t.start.UnixMilli()
+		endMillis := t.end.UnixMilli()
+		sql += fmt.Sprintf(" AND timestamp >= %d AND timestamp <= %d", startMillis, endMillis)
+	} else {
+		// Use relative time range (lookback from now)
+		rangeMillis := ms.Range.Milliseconds()
+		sql += fmt.Sprintf(" AND timestamp >= (now() - %d)", rangeMillis)
+	}
 
 	return sql, nil
 }

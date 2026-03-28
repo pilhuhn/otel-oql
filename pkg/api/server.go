@@ -45,8 +45,16 @@ func NewServer(port int, validator *tenant.Validator, pinotClient *pinot.Client,
 func (s *Server) Start(ctx context.Context) error {
 	mux := http.NewServeMux()
 
-	// Query endpoint with tenant validation
+	// OQL query endpoint with tenant validation
 	mux.Handle("/query", s.validator.HTTPMiddleware(http.HandlerFunc(s.handleQuery)))
+
+	// Prometheus-compatible endpoints
+	mux.Handle("/api/v1/query", s.validator.HTTPMiddleware(http.HandlerFunc(s.handlePrometheusQuery)))
+	mux.Handle("/api/v1/query_range", s.validator.HTTPMiddleware(http.HandlerFunc(s.handlePrometheusQueryRange)))
+
+	// Loki-compatible endpoints
+	mux.Handle("/loki/api/v1/query", s.validator.HTTPMiddleware(http.HandlerFunc(s.handleLokiQuery)))
+	mux.Handle("/loki/api/v1/query_range", s.validator.HTTPMiddleware(http.HandlerFunc(s.handleLokiQueryRange)))
 
 	s.httpServer = &http.Server{
 		Addr:    fmt.Sprintf(":%d", s.port),
