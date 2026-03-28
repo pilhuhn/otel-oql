@@ -49,6 +49,17 @@ func TransformToPrometheusInstant(results []PinotResult, queryTime time.Time) Pr
 	// Use the first result (OQL generates multiple queries, but PromQL should be single)
 	result := results[0]
 
+	// If query returned no rows, return empty result (not an error)
+	if len(result.Rows) == 0 {
+		return PrometheusResponse{
+			Status: "success",
+			Data: &PrometheusData{
+				ResultType: "vector",
+				Result:     []PrometheusResult{},
+			},
+		}
+	}
+
 	// Find column indices
 	valueIdx := findColumn(result.Columns, "value")
 	timestampIdx := findColumn(result.Columns, "timestamp")
@@ -129,6 +140,17 @@ func TransformToPrometheusRange(results []PinotResult) PrometheusResponse {
 
 	// Use the first result
 	result := results[0]
+
+	// If query returned no rows, return empty result (not an error)
+	if len(result.Rows) == 0 {
+		return PrometheusResponse{
+			Status: "success",
+			Data: &PrometheusData{
+				ResultType: "matrix",
+				Result:     []PrometheusResult{},
+			},
+		}
+	}
 
 	// Find column indices
 	valueIdx := findColumn(result.Columns, "value")

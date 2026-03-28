@@ -56,6 +56,17 @@ func TransformToLokiStreams(results []PinotResult, limit int, direction string) 
 	// Use the first result
 	result := results[0]
 
+	// If query returned no rows, return empty result (not an error)
+	if len(result.Rows) == 0 {
+		return LokiResponse{
+			Status: "success",
+			Data: &LokiData{
+				ResultType: "streams",
+				Result:     []LokiResult{},
+			},
+		}
+	}
+
 	// Find column indices
 	bodyIdx := findColumn(result.Columns, "body")
 	timestampIdx := findColumn(result.Columns, "timestamp")
@@ -159,6 +170,17 @@ func TransformToLokiMatrix(results []PinotResult) LokiResponse {
 
 	// Use the first result
 	result := results[0]
+
+	// If query returned no rows, return empty result (not an error)
+	if len(result.Rows) == 0 {
+		return LokiResponse{
+			Status: "success",
+			Data: &LokiData{
+				ResultType: "matrix",
+				Result:     []LokiResult{},
+			},
+		}
+	}
 
 	// Find column indices
 	valueIdx := findColumn(result.Columns, "value")
