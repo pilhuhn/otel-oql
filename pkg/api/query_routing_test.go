@@ -186,7 +186,7 @@ func TestPromQLTranslation(t *testing.T) {
 			wantContains: []string{
 				"otel_metrics",
 				"tenant_id = 42",
-				"metric_name = 'http_requests_total'",
+				"metric_name = 'http.requests.total'",
 			},
 		},
 		{
@@ -195,7 +195,7 @@ func TestPromQLTranslation(t *testing.T) {
 			tenantID: 0,
 			wantContains: []string{
 				"otel_metrics",
-				"metric_name = 'cpu_usage'",
+				"metric_name = 'cpu.usage'",
 				"service_name = 'backend'",
 			},
 		},
@@ -213,7 +213,7 @@ func TestPromQLTranslation(t *testing.T) {
 			promql:   "http_requests_total[5m]",
 			tenantID: 0,
 			wantContains: []string{
-				"timestamp >= (now() - 300000)",
+				"\"timestamp\" >= (now() - 300000)",
 			},
 		},
 	}

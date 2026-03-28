@@ -111,8 +111,10 @@ func (t *Translator) translateVectorSelector(vs *parser.VectorSelector) (string,
 	}
 
 	// Add metric name filter
+	// Translate Prometheus naming convention (underscores) to OTel convention (dots)
 	if metricName != "" {
-		sql += " AND metric_name = " + sqlutil.StringLiteral(metricName)
+		translatedName := translateMetricName(metricName)
+		sql += " AND metric_name = " + sqlutil.StringLiteral(translatedName)
 	}
 
 	// Add label matchers
@@ -128,7 +130,7 @@ func (t *Translator) translateVectorSelector(vs *parser.VectorSelector) (string,
 	if t.start != nil && t.end != nil {
 		startMillis := t.start.UnixMilli()
 		endMillis := t.end.UnixMilli()
-		sql += fmt.Sprintf(" AND timestamp >= %d AND timestamp <= %d", startMillis, endMillis)
+		sql += fmt.Sprintf(" AND \"timestamp\" >= %d AND \"timestamp\" <= %d", startMillis, endMillis)
 	}
 
 	return sql, nil
@@ -163,11 +165,11 @@ func (t *Translator) translateMatrixSelector(ms *parser.MatrixSelector) (string,
 		// Use explicit time range
 		startMillis := t.start.UnixMilli()
 		endMillis := t.end.UnixMilli()
-		sql += fmt.Sprintf(" AND timestamp >= %d AND timestamp <= %d", startMillis, endMillis)
+		sql += fmt.Sprintf(" AND \"timestamp\" >= %d AND \"timestamp\" <= %d", startMillis, endMillis)
 	} else {
 		// Use relative time range (lookback from now)
 		rangeMillis := ms.Range.Milliseconds()
-		sql += fmt.Sprintf(" AND timestamp >= (now() - %d)", rangeMillis)
+		sql += fmt.Sprintf(" AND \"timestamp\" >= (now() - %d)", rangeMillis)
 	}
 
 	return sql, nil
@@ -274,6 +276,40 @@ func (t *Translator) translateAggregate(ae *parser.AggregateExpr) (string, error
 // translateBinary translates binary expressions
 // Example: metric1 > 100
 func (t *Translator) translateBinary(be *parser.BinaryExpr) (string, error) {
+	// Special case: scalar arithmetic (e.g., 1+1 for Grafana connection test)
+	lhsNum, lhsIsNum := be.LHS.(*parser.NumberLiteral)
+	rhsNum, rhsIsNum := be.RHS.(*parser.NumberLiteral)
+
+	if lhsIsNum && rhsIsNum {
+		// Both sides are numbers - evaluate the expression
+		var result float64
+		switch be.Op {
+		case parser.ADD:
+			result = lhsNum.Val + rhsNum.Val
+		case parser.SUB:
+			result = lhsNum.Val - rhsNum.Val
+		case parser.MUL:
+			result = lhsNum.Val * rhsNum.Val
+		case parser.DIV:
+			if rhsNum.Val == 0 {
+				return "", fmt.Errorf("division by zero")
+			}
+			result = lhsNum.Val / rhsNum.Val
+		case parser.MOD:
+			return "", fmt.Errorf("modulo operator not supported for scalars")
+		case parser.POW:
+			return "", fmt.Errorf("power operator not supported for scalars")
+		default:
+			return "", fmt.Errorf("unsupported scalar operator: %s", be.Op)
+		}
+
+		// Return a SQL query that produces this scalar value
+		// This is used for Grafana connection tests (e.g., "1+1")
+		// Pinot requires a FROM clause, so we use a dummy table or LIMIT 1
+		// We'll use a simple query that returns the scalar without hitting any table
+		return fmt.Sprintf("SELECT %f AS value FROM otel_metrics LIMIT 1", result), nil
+	}
+
 	// Handle comparison with scalar on RHS
 	// e.g., http_requests_total > 100
 	if be.Op.IsComparisonOperator() {
@@ -361,6 +397,13 @@ func (t *Translator) translateRateFunction(call *parser.Call) (string, error) {
 	)
 
 	return sql, nil
+}
+
+// translateMetricName converts Prometheus metric naming convention (underscores)
+// to OpenTelemetry metric naming convention (dots).
+// Example: "jvm_memory_used" -> "jvm.memory.used"
+func translateMetricName(prometheusName string) string {
+	return strings.ReplaceAll(prometheusName, "_", ".")
 }
 
 // getNativeColumn maps label names to native Pinot columns

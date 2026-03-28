@@ -17,37 +17,37 @@ func TestVectorSelector(t *testing.T) {
 		{
 			name:    "simple metric name",
 			promql:  `http_requests_total`,
-			wantSQL: "SELECT * FROM otel_metrics WHERE tenant_id = 0 AND metric_name = 'http_requests_total'",
+			wantSQL: "SELECT * FROM otel_metrics WHERE tenant_id = 0 AND metric_name = 'http.requests.total'",
 			wantErr: false,
 		},
 		{
 			name:    "metric with single label",
 			promql:  `http_requests_total{job="api"}`,
-			wantSQL: "SELECT * FROM otel_metrics WHERE tenant_id = 0 AND metric_name = 'http_requests_total' AND job = 'api'",
+			wantSQL: "SELECT * FROM otel_metrics WHERE tenant_id = 0 AND metric_name = 'http.requests.total' AND job = 'api'",
 			wantErr: false,
 		},
 		{
 			name:    "metric with multiple labels",
 			promql:  `http_requests_total{job="api",status="200"}`,
-			wantSQL: "SELECT * FROM otel_metrics WHERE tenant_id = 0 AND metric_name = 'http_requests_total' AND job = 'api' AND http_status_code = '200'",
+			wantSQL: "SELECT * FROM otel_metrics WHERE tenant_id = 0 AND metric_name = 'http.requests.total' AND job = 'api' AND http_status_code = '200'",
 			wantErr: false,
 		},
 		{
 			name:    "metric with label != matcher",
 			promql:  `http_requests_total{status!="500"}`,
-			wantSQL: "SELECT * FROM otel_metrics WHERE tenant_id = 0 AND metric_name = 'http_requests_total' AND http_status_code <> '500'",
+			wantSQL: "SELECT * FROM otel_metrics WHERE tenant_id = 0 AND metric_name = 'http.requests.total' AND http_status_code <> '500'",
 			wantErr: false,
 		},
 		{
 			name:    "metric with regex matcher",
 			promql:  `http_requests_total{job=~"api.*"}`,
-			wantSQL: "SELECT * FROM otel_metrics WHERE tenant_id = 0 AND metric_name = 'http_requests_total' AND REGEXP_LIKE(job, 'api.*')",
+			wantSQL: "SELECT * FROM otel_metrics WHERE tenant_id = 0 AND metric_name = 'http.requests.total' AND REGEXP_LIKE(job, 'api.*')",
 			wantErr: false,
 		},
 		{
 			name:    "metric with negative regex matcher",
 			promql:  `http_requests_total{job!~"test.*"}`,
-			wantSQL: "SELECT * FROM otel_metrics WHERE tenant_id = 0 AND metric_name = 'http_requests_total' AND NOT REGEXP_LIKE(job, 'test.*')",
+			wantSQL: "SELECT * FROM otel_metrics WHERE tenant_id = 0 AND metric_name = 'http.requests.total' AND NOT REGEXP_LIKE(job, 'test.*')",
 			wantErr: false,
 		},
 	}
@@ -93,8 +93,8 @@ func TestMatrixSelector(t *testing.T) {
 			wantContains: []string{
 				"SELECT * FROM otel_metrics",
 				"tenant_id = 0",
-				"metric_name = 'http_requests_total'",
-				"timestamp >= (now() - 300000)", // 5 minutes in ms
+				"metric_name = 'http.requests.total'",
+				"\"timestamp\" >= (now() - 300000)", // 5 minutes in ms
 			},
 			wantErr: false,
 		},
@@ -102,9 +102,9 @@ func TestMatrixSelector(t *testing.T) {
 			name:   "1 hour range",
 			promql: `cpu_usage{job="api"}[1h]`,
 			wantContains: []string{
-				"metric_name = 'cpu_usage'",
+				"metric_name = 'cpu.usage'",
 				"job = 'api'",
-				"timestamp >= (now() - 3600000)", // 1 hour in ms
+				"\"timestamp\" >= (now() - 3600000)", // 1 hour in ms
 			},
 			wantErr: false,
 		},
@@ -152,7 +152,7 @@ func TestAggregation(t *testing.T) {
 				"SELECT SUM(value)",
 				"FROM otel_metrics",
 				"tenant_id = 0",
-				"metric_name = 'http_requests_total'",
+				"metric_name = 'http.requests.total'",
 			},
 			wantErr: false,
 		},
@@ -162,7 +162,7 @@ func TestAggregation(t *testing.T) {
 			wantContains: []string{
 				"SELECT job, SUM(value)",
 				"GROUP BY job",
-				"metric_name = 'http_requests_total'",
+				"metric_name = 'http.requests.total'",
 			},
 			wantErr: false,
 		},
@@ -180,7 +180,7 @@ func TestAggregation(t *testing.T) {
 			promql: `avg(cpu_usage)`,
 			wantContains: []string{
 				"SELECT AVG(value)",
-				"metric_name = 'cpu_usage'",
+				"metric_name = 'cpu.usage'",
 			},
 			wantErr: false,
 		},
@@ -189,7 +189,7 @@ func TestAggregation(t *testing.T) {
 			promql: `count(http_requests_total)`,
 			wantContains: []string{
 				"SELECT COUNT(*)",
-				"metric_name = 'http_requests_total'",
+				"metric_name = 'http.requests.total'",
 			},
 			wantErr: false,
 		},
@@ -198,7 +198,7 @@ func TestAggregation(t *testing.T) {
 			promql: `min(response_time)`,
 			wantContains: []string{
 				"SELECT MIN(value)",
-				"metric_name = 'response_time'",
+				"metric_name = 'response.time'",
 			},
 			wantErr: false,
 		},
@@ -207,7 +207,7 @@ func TestAggregation(t *testing.T) {
 			promql: `max(response_time)`,
 			wantContains: []string{
 				"SELECT MAX(value)",
-				"metric_name = 'response_time'",
+				"metric_name = 'response.time'",
 			},
 			wantErr: false,
 		},
@@ -252,7 +252,7 @@ func TestBinaryComparison(t *testing.T) {
 			name:   "greater than",
 			promql: `cpu_usage > 80`,
 			wantContains: []string{
-				"metric_name = 'cpu_usage'",
+				"metric_name = 'cpu.usage'",
 				"value > 80",
 			},
 			wantErr: false,
@@ -261,7 +261,7 @@ func TestBinaryComparison(t *testing.T) {
 			name:   "less than",
 			promql: `memory_usage < 50`,
 			wantContains: []string{
-				"metric_name = 'memory_usage'",
+				"metric_name = 'memory.usage'",
 				"value < 50",
 			},
 			wantErr: false,
@@ -270,7 +270,7 @@ func TestBinaryComparison(t *testing.T) {
 			name:   "greater than or equal",
 			promql: `disk_usage >= 90`,
 			wantContains: []string{
-				"metric_name = 'disk_usage'",
+				"metric_name = 'disk.usage'",
 				"value >= 90",
 			},
 			wantErr: false,
@@ -288,7 +288,7 @@ func TestBinaryComparison(t *testing.T) {
 			name:   "equal",
 			promql: `status_code == 200`,
 			wantContains: []string{
-				"metric_name = 'status_code'",
+				"metric_name = 'status.code'",
 				"value = 200",
 			},
 			wantErr: false,
@@ -297,7 +297,7 @@ func TestBinaryComparison(t *testing.T) {
 			name:   "not equal",
 			promql: `status_code != 500`,
 			wantContains: []string{
-				"metric_name = 'status_code'",
+				"metric_name = 'status.code'",
 				"value <> 500",
 			},
 			wantErr: false,
@@ -344,8 +344,8 @@ func TestRateFunction(t *testing.T) {
 			promql: `rate(http_requests_total[5m])`,
 			wantContains: []string{
 				"SELECT (MAX(value) - MIN(value))",
-				"metric_name = 'http_requests_total'",
-				"timestamp >= (now() - 300000)",
+				"metric_name = 'http.requests.total'", // Translated from underscores to dots
+				"\"timestamp\" >= (now() - 300000)",
 			},
 			wantErr: false,
 		},
@@ -354,8 +354,8 @@ func TestRateFunction(t *testing.T) {
 			promql: `irate(cpu_usage[1m])`,
 			wantContains: []string{
 				"SELECT (MAX(value) - MIN(value))",
-				"metric_name = 'cpu_usage'",
-				"timestamp >= (now() - 60000)",
+				"metric_name = 'cpu.usage'", // Translated from underscores to dots
+				"\"timestamp\" >= (now() - 60000)",
 			},
 			wantErr: false,
 		},
@@ -444,6 +444,82 @@ func TestParseErrors(t *testing.T) {
 			_, err := translator.TranslateQuery(tt.promql)
 			if err == nil {
 				t.Errorf("expected parse error, got nil")
+			}
+		})
+	}
+}
+
+func TestScalarArithmetic(t *testing.T) {
+	translator := NewTranslator(0)
+
+	tests := []struct {
+		name         string
+		promql       string
+		wantContains []string
+		wantErr      bool
+	}{
+		{
+			name:   "addition (Grafana connection test)",
+			promql: `1+1`,
+			wantContains: []string{
+				"SELECT 2.000000 AS value",
+				"FROM otel_metrics",
+				"LIMIT 1",
+			},
+			wantErr: false,
+		},
+		{
+			name:   "subtraction",
+			promql: `10-3`,
+			wantContains: []string{
+				"SELECT 7.000000 AS value",
+			},
+			wantErr: false,
+		},
+		{
+			name:   "multiplication",
+			promql: `2*3`,
+			wantContains: []string{
+				"SELECT 6.000000 AS value",
+			},
+			wantErr: false,
+		},
+		{
+			name:   "division",
+			promql: `10/2`,
+			wantContains: []string{
+				"SELECT 5.000000 AS value",
+			},
+			wantErr: false,
+		},
+		{
+			name:    "division by zero",
+			promql:  `10/0`,
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sqlQueries, err := translator.TranslateQuery(tt.promql)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("TranslateQuery() error = %v, wantErr %v", err, tt.wantErr)
+				return
+			}
+			if err != nil {
+				return
+			}
+
+			if len(sqlQueries) != 1 {
+				t.Errorf("expected 1 SQL query, got %d", len(sqlQueries))
+				return
+			}
+
+			gotSQL := sqlQueries[0]
+			for _, want := range tt.wantContains {
+				if !strings.Contains(gotSQL, want) {
+					t.Errorf("SQL should contain %q\ngot: %s", want, gotSQL)
+				}
 			}
 		})
 	}

@@ -686,6 +686,21 @@ otel-oql/
     - ✅ REALTIME tables with Kafka streaming
     - ✅ Tenant-based partitioning
 
+11a. **Pinot SQL Reserved Keywords**: Quote column names that conflict with SQL keywords
+    - ⚠️ `timestamp` is a reserved keyword in Pinot SQL - **MUST** be quoted as `"timestamp"`
+    - ✅ All PromQL/LogQL translators quote the timestamp column: `"timestamp" >= ...`
+    - ✅ Without quotes: `SQLParsingError: Encountered "AND" "AND"` (parser confusion)
+    - 📝 Discovered March 2026 when PromQL range queries failed with parsing error
+    - 💡 **Lesson**: Always test generated SQL directly in Pinot UI to catch syntax errors
+    - 💡 Other potential reserved words to watch: `value`, `type`, `name`, `count`, `sum`
+
+11b. **Pinot Port Configuration**: Only port 9000 is used for SQL queries
+    - ✅ **Broker SQL endpoint**: `http://localhost:9000/query/sql` (or `/sql`)
+    - ❌ **Port 8099 is NOT for SQL**: This is the controller port, not for queries
+    - ✅ Default in config: `PINOT_URL=http://localhost:9000`
+    - 📝 The Pinot client (`pkg/pinot/client.go`) uses `brokerURL + "/sql"` for all queries
+    - 💡 **Lesson**: If SQL queries fail with 404, check you're using port 9000, not 8099
+
 12. **Error Handling**: Clear, actionable error messages
     - ✅ Parse errors include position and context
     - ✅ Translation errors explain what's unsupported
@@ -737,6 +752,11 @@ The project supports 4 query languages, each serving different use cases:
 - Translation: AST → Pinot SQL for otel_metrics table
 - Tests: 171 unit + 5 integration = 176 tests
 - Result: 100% parser reuse, straightforward translation
+- **Grafana Integration**: Added scalar arithmetic support (e.g., `1+1`) for connection tests
+  - Grafana tests connectivity with simple arithmetic expressions
+  - Translates to: `SELECT 2.0 AS value FROM otel_metrics LIMIT 1`
+  - Supports: `+`, `-`, `*`, `/` operators between scalar values
+  - Returns Prometheus-compatible instant vector response
 
 **Phase 2: LogQL** (March 2026)
 - Parser: Hybrid - Prometheus for stream selectors, custom for pipelines
