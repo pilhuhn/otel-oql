@@ -19,7 +19,7 @@ func TestComplexQueries(t *testing.T) {
 			promql:  `sum by (service) (rate(http_requests_total{job="api"}[5m]))`,
 			wantErr: false,
 			checkSQL: func(sql string) bool {
-				// Should contain tenant_id=42, metric name (translated to dots), label filter, time range, and aggregation
+				// Should contain tenant_id=42, metric name (converted to dots), label filter, time range, and aggregation
 				return contains(sql, "tenant_id = 42") &&
 					contains(sql, "metric_name = 'http.requests.total'") &&
 					contains(sql, "job = 'api'") &&

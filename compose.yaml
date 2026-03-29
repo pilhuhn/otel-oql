@@ -40,6 +40,13 @@ services:
       - otel-network
     volumes: 
       - ./data/pinot:/opt/pinot/data:rw,z
+
+  perses:
+    image: persesdev/perses:v0.53.1-debug
+    ports: 
+      - "8082:8080"
+    volumes:
+      - ./data/perses:/app
   
 
 networks:

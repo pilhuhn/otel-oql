@@ -771,7 +771,7 @@ The project supports 4 query languages, each serving different use cases:
 - Estimated: 30-40% concept reuse from PromQL/LogQL
 - Challenge: Span selection syntax differs significantly
 - Estimated Effort: 2-3 weeks (330+ tests planned)
-- **See [TRACEQL_PHASE3.md](./TRACEQL_PHASE3.md) for detailed implementation plan**
+- **See [TRACEQL_PHASE3.md](./docs/query-languages/TRACEQL_PHASE3.md) for detailed implementation plan**
 - **Note**: OQL already provides comprehensive trace querying; TraceQL adds Tempo compatibility
 
 ### Query Routing

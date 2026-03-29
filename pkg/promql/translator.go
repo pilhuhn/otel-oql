@@ -2,6 +2,7 @@ package promql
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 
@@ -12,9 +13,10 @@ import (
 
 // Translator translates PromQL queries to Pinot SQL
 type Translator struct {
-	tenantID int
-	start    *time.Time // Optional start time for range queries
-	end      *time.Time // Optional end time for range queries
+	tenantID    int
+	start       *time.Time        // Optional start time for range queries
+	end         *time.Time        // Optional end time for range queries
+	metricNames map[string]string // Maps normalized names (underscores) to original names (dots)
 }
 
 // NewTranslator creates a new PromQL to SQL translator
@@ -24,8 +26,13 @@ func NewTranslator(tenantID int) *Translator {
 
 // TranslateQuery parses PromQL and translates to Pinot SQL
 func (t *Translator) TranslateQuery(promql string) ([]string, error) {
+	// Normalize metric names (dots → underscores) before parsing
+	// This allows OTel metric names like "jvm.memory.used" to be parsed as valid PromQL
+	normalized, metricMapping := normalizeMetricNames(promql)
+	t.metricNames = metricMapping
+
 	// Parse using Prometheus parser
-	expr, err := parser.ParseExpr(promql)
+	expr, err := parser.ParseExpr(normalized)
 	if err != nil {
 		return nil, fmt.Errorf("promql parse error: %w", err)
 	}
@@ -111,10 +118,10 @@ func (t *Translator) translateVectorSelector(vs *parser.VectorSelector) (string,
 	}
 
 	// Add metric name filter
-	// Translate Prometheus naming convention (underscores) to OTel convention (dots)
+	// Translate normalized name (underscores) back to original OTel name (dots)
 	if metricName != "" {
-		translatedName := translateMetricName(metricName)
-		sql += " AND metric_name = " + sqlutil.StringLiteral(translatedName)
+		originalName := t.translateMetricName(metricName)
+		sql += " AND metric_name = " + sqlutil.StringLiteral(originalName)
 	}
 
 	// Add label matchers
@@ -399,11 +406,42 @@ func (t *Translator) translateRateFunction(call *parser.Call) (string, error) {
 	return sql, nil
 }
 
-// translateMetricName converts Prometheus metric naming convention (underscores)
-// to OpenTelemetry metric naming convention (dots).
-// Example: "jvm_memory_used" -> "jvm.memory.used"
-func translateMetricName(prometheusName string) string {
-	return strings.ReplaceAll(prometheusName, "_", ".")
+// normalizeMetricNames pre-processes a PromQL query to replace dots in metric names
+// with underscores, making them valid PromQL identifiers.
+// Returns the normalized query and a mapping from normalized names to original names.
+//
+// Example: "jvm.memory.used" → "jvm_memory_used"
+//
+// This allows OTel metric names (which use dots) to be queried via PromQL (which only allows underscores/colons).
+func normalizeMetricNames(promql string) (string, map[string]string) {
+	mapping := make(map[string]string)
+
+	// Regex to find metric-like identifiers with dots
+	// Matches: jvm.memory.used, http.server.duration, etc.
+	// Pattern: starts with letter/underscore, followed by alphanumeric/underscore, contains at least one dot
+	re := regexp.MustCompile(`\b([a-zA-Z_][a-zA-Z0-9_]*(?:\.[a-zA-Z0-9_]+)+)\b`)
+
+	normalized := re.ReplaceAllStringFunc(promql, func(match string) string {
+		// Replace dots with underscores to make it valid PromQL
+		normalized := strings.ReplaceAll(match, ".", "_")
+		mapping[normalized] = match // Store original name for SQL generation
+		return normalized
+	})
+
+	return normalized, mapping
+}
+
+// translateMetricName converts a metric name from PromQL format (underscores)
+// to OTel format (dots) for database queries.
+func (t *Translator) translateMetricName(normalizedName string) string {
+	// Check if we have a mapping (dots were replaced with underscores during normalization)
+	if originalName, ok := t.metricNames[normalizedName]; ok {
+		return originalName
+	}
+	// No mapping found - input used underscores (standard PromQL format)
+	// Convert to OTel format (dots) for database lookup
+	// Example: jvm_memory_used → jvm.memory.used
+	return strings.ReplaceAll(normalizedName, "_", ".")
 }
 
 // getNativeColumn maps label names to native Pinot columns

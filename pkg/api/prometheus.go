@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/pilhuhn/otel-oql/pkg/api/formats"
@@ -309,9 +310,25 @@ func (s *Server) handlePrometheusLabelValues(w http.ResponseWriter, r *http.Requ
 	}
 	response := formats.TransformToPrometheusLabelValues(pinotResults)
 
+	// For __name__ label, convert OTel metric names (dots) to PromQL format (underscores)
+	// This allows Grafana autocomplete to work with PromQL queries
+	if labelName == "__name__" {
+		convertedValues := make([]string, len(response.Data))
+		for i, value := range response.Data {
+			convertedValues[i] = convertOTelToPromQLMetricName(value)
+		}
+		response.Data = convertedValues
+	}
+
 	// Return response
 	s.obs.RecordRequest(ctx, "/api/v1/label/values", time.Since(start), http.StatusOK)
 	writeJSON(w, http.StatusOK, response)
+}
+
+// convertOTelToPromQLMetricName converts OTel metric names (dots) to PromQL format (underscores)
+// Example: jvm.memory.used → jvm_memory_used
+func convertOTelToPromQLMetricName(otelName string) string {
+	return strings.ReplaceAll(otelName, ".", "_")
 }
 
 // buildLabelsSQL constructs SQL to get distinct label names

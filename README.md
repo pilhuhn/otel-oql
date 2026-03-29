@@ -131,7 +131,7 @@ OTEL-OQL exposes 4 Grafana-compatible endpoints:
 - `GET|POST /loki/api/v1/query` - Instant log queries
 - `GET|POST /loki/api/v1/query_range` - Range log queries
 
-For complete Grafana integration guide, dashboard import instructions, and troubleshooting, see [GRAFANA_INTEGRATION.md](./GRAFANA_INTEGRATION.md).
+For complete Grafana integration guide, dashboard import instructions, and troubleshooting, see [GRAFANA_INTEGRATION.md](./docs/api/GRAFANA_INTEGRATION.md).
 
 ## OTLP Data Ingestion
 

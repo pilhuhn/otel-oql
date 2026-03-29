@@ -15,37 +15,55 @@ func TestVectorSelector(t *testing.T) {
 		wantErr  bool
 	}{
 		{
-			name:    "simple metric name",
+			name:    "simple metric name (PromQL style with underscores)",
 			promql:  `http_requests_total`,
 			wantSQL: "SELECT * FROM otel_metrics WHERE tenant_id = 0 AND metric_name = 'http.requests.total'",
 			wantErr: false,
 		},
 		{
-			name:    "metric with single label",
+			name:    "OTel metric name with dots",
+			promql:  `jvm.memory.used`,
+			wantSQL: "SELECT * FROM otel_metrics WHERE tenant_id = 0 AND metric_name = 'jvm.memory.used'",
+			wantErr: false,
+		},
+		{
+			name:    "OTel metric with labels",
+			promql:  `jvm.memory.used{job="myapp",area="heap"}`,
+			wantSQL: "SELECT * FROM otel_metrics WHERE tenant_id = 0 AND metric_name = 'jvm.memory.used' AND job = 'myapp' AND JSON_EXTRACT_SCALAR(attributes, '$.area', 'STRING') = 'heap'",
+			wantErr: false,
+		},
+		{
+			name:    "http.server.duration - common OTel metric",
+			promql:  `http.server.duration{method="GET"}`,
+			wantSQL: "SELECT * FROM otel_metrics WHERE tenant_id = 0 AND metric_name = 'http.server.duration' AND http_method = 'GET'",
+			wantErr: false,
+		},
+		{
+			name:    "metric with single label (PromQL style)",
 			promql:  `http_requests_total{job="api"}`,
 			wantSQL: "SELECT * FROM otel_metrics WHERE tenant_id = 0 AND metric_name = 'http.requests.total' AND job = 'api'",
 			wantErr: false,
 		},
 		{
-			name:    "metric with multiple labels",
+			name:    "metric with multiple labels (PromQL style)",
 			promql:  `http_requests_total{job="api",status="200"}`,
 			wantSQL: "SELECT * FROM otel_metrics WHERE tenant_id = 0 AND metric_name = 'http.requests.total' AND job = 'api' AND http_status_code = '200'",
 			wantErr: false,
 		},
 		{
-			name:    "metric with label != matcher",
+			name:    "metric with label != matcher (PromQL style)",
 			promql:  `http_requests_total{status!="500"}`,
 			wantSQL: "SELECT * FROM otel_metrics WHERE tenant_id = 0 AND metric_name = 'http.requests.total' AND http_status_code <> '500'",
 			wantErr: false,
 		},
 		{
-			name:    "metric with regex matcher",
+			name:    "metric with regex matcher (PromQL style)",
 			promql:  `http_requests_total{job=~"api.*"}`,
 			wantSQL: "SELECT * FROM otel_metrics WHERE tenant_id = 0 AND metric_name = 'http.requests.total' AND REGEXP_LIKE(job, 'api.*')",
 			wantErr: false,
 		},
 		{
-			name:    "metric with negative regex matcher",
+			name:    "metric with negative regex matcher (PromQL style)",
 			promql:  `http_requests_total{job!~"test.*"}`,
 			wantSQL: "SELECT * FROM otel_metrics WHERE tenant_id = 0 AND metric_name = 'http.requests.total' AND NOT REGEXP_LIKE(job, 'test.*')",
 			wantErr: false,
