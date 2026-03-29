@@ -42,6 +42,21 @@ type LokiRangeParams struct {
 	Direction string
 }
 
+// LokiLabelsParams represents parameters for /loki/api/v1/labels
+type LokiLabelsParams struct {
+	Start time.Time // Start timestamp (optional)
+	End   time.Time // End timestamp (optional)
+	Limit int       // Max number of results (optional)
+}
+
+// LokiLabelValuesParams represents parameters for /loki/api/v1/label/{name}/values
+type LokiLabelValuesParams struct {
+	LabelName string    // Name of the label (from URL path)
+	Start     time.Time // Start timestamp (optional)
+	End       time.Time // End timestamp (optional)
+	Limit     int       // Max number of results (optional)
+}
+
 // PrometheusLabelsParams represents parameters for /api/v1/labels
 type PrometheusLabelsParams struct {
 	Match []string  // Series selectors to filter which series to consider
@@ -376,6 +391,84 @@ func ParsePrometheusLabelValuesParams(r *http.Request, labelName string) (*Prome
 	// Parse match[] parameters (can be multiple)
 	if matches, ok := r.Form["match[]"]; ok {
 		params.Match = matches
+	}
+
+	// Parse optional start time
+	if startStr := r.FormValue("start"); startStr != "" {
+		start, err := parseTime(startStr)
+		if err != nil {
+			return nil, fmt.Errorf("invalid start parameter: %w", err)
+		}
+		params.Start = start
+	}
+
+	// Parse optional end time
+	if endStr := r.FormValue("end"); endStr != "" {
+		end, err := parseTime(endStr)
+		if err != nil {
+			return nil, fmt.Errorf("invalid end parameter: %w", err)
+		}
+		params.End = end
+	}
+
+	// Parse optional limit
+	if limitStr := r.FormValue("limit"); limitStr != "" {
+		limit, err := strconv.Atoi(limitStr)
+		if err != nil {
+			return nil, fmt.Errorf("invalid limit parameter: %w", err)
+		}
+		params.Limit = limit
+	}
+
+	return params, nil
+}
+
+// ParseLokiLabelsParams parses parameters for /loki/api/v1/labels
+func ParseLokiLabelsParams(r *http.Request) (*LokiLabelsParams, error) {
+	if err := r.ParseForm(); err != nil {
+		return nil, fmt.Errorf("failed to parse form: %w", err)
+	}
+
+	params := &LokiLabelsParams{}
+
+	// Parse optional start time
+	if startStr := r.FormValue("start"); startStr != "" {
+		start, err := parseTime(startStr)
+		if err != nil {
+			return nil, fmt.Errorf("invalid start parameter: %w", err)
+		}
+		params.Start = start
+	}
+
+	// Parse optional end time
+	if endStr := r.FormValue("end"); endStr != "" {
+		end, err := parseTime(endStr)
+		if err != nil {
+			return nil, fmt.Errorf("invalid end parameter: %w", err)
+		}
+		params.End = end
+	}
+
+	// Parse optional limit
+	if limitStr := r.FormValue("limit"); limitStr != "" {
+		limit, err := strconv.Atoi(limitStr)
+		if err != nil {
+			return nil, fmt.Errorf("invalid limit parameter: %w", err)
+		}
+		params.Limit = limit
+	}
+
+	return params, nil
+}
+
+// ParseLokiLabelValuesParams parses parameters for /loki/api/v1/label/{name}/values
+func ParseLokiLabelValuesParams(r *http.Request, labelName string) (*LokiLabelValuesParams, error) {
+	if err := r.ParseForm(); err != nil {
+		return nil, fmt.Errorf("failed to parse form: %w", err)
+	}
+
+	params := &LokiLabelValuesParams{
+		LabelName: labelName,
 	}
 
 	// Parse optional start time

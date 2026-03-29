@@ -57,6 +57,8 @@ func (s *Server) Start(ctx context.Context) error {
 	// Loki-compatible endpoints
 	mux.Handle("/loki/api/v1/query", s.validator.HTTPMiddleware(http.HandlerFunc(s.handleLokiQuery)))
 	mux.Handle("/loki/api/v1/query_range", s.validator.HTTPMiddleware(http.HandlerFunc(s.handleLokiQueryRange)))
+	mux.Handle("/loki/api/v1/labels", s.validator.HTTPMiddleware(http.HandlerFunc(s.handleLokiLabels)))
+	mux.HandleFunc("/loki/api/v1/label/", s.validator.HTTPMiddleware(http.HandlerFunc(s.handleLokiLabelValues)).ServeHTTP)
 
 	s.httpServer = &http.Server{
 		Addr:    fmt.Sprintf(":%d", s.port),
