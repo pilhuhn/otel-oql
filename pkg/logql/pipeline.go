@@ -64,6 +64,11 @@ func parseNextStage(input string) (PipelineStage, int, error) {
 		return stage, consumed, nil
 	}
 
+	// Try label manipulation (drop, keep)
+	if stage, consumed := tryParseLabelManipulation(input); stage != nil {
+		return stage, consumed, nil
+	}
+
 	return nil, 0, fmt.Errorf("unknown pipeline stage: %s", input)
 }
 
@@ -125,32 +130,45 @@ func tryParseLabelParser(input string) (*LabelParser, int) {
 }
 
 // parseStringLiteral parses a quoted string and returns the value and characters consumed
+// Supports both double quotes ("text") and backticks (`text`)
 func parseStringLiteral(input string) (string, int) {
 	input = strings.TrimSpace(input)
 
-	if len(input) == 0 || input[0] != '"' {
+	if len(input) == 0 {
 		return "", 0
 	}
 
-	// Find the closing quote (handle escapes)
+	// Determine quote type
+	var quote byte
+	if input[0] == '"' {
+		quote = '"'
+	} else if input[0] == '`' {
+		quote = '`'
+	} else {
+		return "", 0
+	}
+
+	// Find the closing quote (handle escapes for double quotes)
 	escaped := false
 	for i := 1; i < len(input); i++ {
-		if escaped {
+		if quote == '"' && escaped {
 			escaped = false
 			continue
 		}
 
-		if input[i] == '\\' {
+		if quote == '"' && input[i] == '\\' {
 			escaped = true
 			continue
 		}
 
-		if input[i] == '"' {
+		if input[i] == quote {
 			// Found the closing quote
 			value := input[1:i]
-			// Unescape the string
-			value = strings.ReplaceAll(value, `\"`, `"`)
-			value = strings.ReplaceAll(value, `\\`, `\`)
+			// Unescape the string (only for double quotes)
+			if quote == '"' {
+				value = strings.ReplaceAll(value, `\"`, `"`)
+				value = strings.ReplaceAll(value, `\\`, `\`)
+			}
 			return value, i + 1
 		}
 	}
@@ -194,4 +212,68 @@ func SplitQueryParts(query string) (streamSelector string, pipeline string, err 
 	pipeline = strings.TrimSpace(query[selectorEnd:])
 
 	return streamSelector, pipeline, nil
+}
+
+// tryParseLabelManipulation tries to parse label manipulation: drop label1, label2 | keep label3
+func tryParseLabelManipulation(input string) (*LabelManipulation, int) {
+	input = strings.TrimSpace(input)
+
+	var operation string
+	var rest string
+
+	// Check for drop or keep
+	if strings.HasPrefix(input, "drop ") {
+		operation = "drop"
+		rest = strings.TrimSpace(input[5:])
+	} else if strings.HasPrefix(input, "keep ") {
+		operation = "keep"
+		rest = strings.TrimSpace(input[5:])
+	} else {
+		return nil, 0
+	}
+
+	// Parse comma-separated list of labels
+	labels := make([]string, 0)
+	consumed := len(input) - len(rest)
+
+	// Parse labels until we hit | or end of string
+	for {
+		rest = strings.TrimSpace(rest)
+		if rest == "" || strings.HasPrefix(rest, "|") {
+			break
+		}
+
+		// Find next label (ends with comma, |, or end of string)
+		labelEnd := strings.IndexAny(rest, ",|")
+		if labelEnd == -1 {
+			// Last label
+			labels = append(labels, strings.TrimSpace(rest))
+			consumed = len(input)
+			break
+		}
+
+		label := strings.TrimSpace(rest[:labelEnd])
+		if label != "" {
+			labels = append(labels, label)
+		}
+
+		// Skip the comma
+		if rest[labelEnd] == ',' {
+			rest = rest[labelEnd+1:]
+			consumed = len(input) - len(rest)
+		} else {
+			// Hit a |, stop here
+			consumed = len(input) - len(rest)
+			break
+		}
+	}
+
+	if len(labels) == 0 {
+		return nil, 0
+	}
+
+	return &LabelManipulation{
+		Operation: operation,
+		Labels:    labels,
+	}, consumed
 }

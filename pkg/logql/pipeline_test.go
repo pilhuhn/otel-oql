@@ -500,3 +500,123 @@ func TestParseStringLiteral(t *testing.T) {
 		})
 	}
 }
+
+func TestParsePipeline_LabelManipulation(t *testing.T) {
+	tests := []struct {
+		name       string
+		input      string
+		wantStages int
+		wantOp     string
+		wantLabels []string
+	}{
+		{
+			name:       "drop single label",
+			input:      "| drop __error__",
+			wantStages: 1,
+			wantOp:     "drop",
+			wantLabels: []string{"__error__"},
+		},
+		{
+			name:       "drop multiple labels",
+			input:      "| drop label1, label2, label3",
+			wantStages: 1,
+			wantOp:     "drop",
+			wantLabels: []string{"label1", "label2", "label3"},
+		},
+		{
+			name:       "keep labels",
+			input:      "| keep level, service",
+			wantStages: 1,
+			wantOp:     "keep",
+			wantLabels: []string{"level", "service"},
+		},
+		{
+			name:       "drop with line filter",
+			input:      "|= \"error\" | drop __error__",
+			wantStages: 2,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			stages, err := ParsePipeline(tt.input)
+			if err != nil {
+				t.Fatalf("ParsePipeline() error = %v", err)
+			}
+
+			if len(stages) != tt.wantStages {
+				t.Errorf("got %d stages, want %d", len(stages), tt.wantStages)
+			}
+
+			if tt.wantOp != "" {
+				// Check the label manipulation stage
+				var found bool
+				for _, stage := range stages {
+					if lm, ok := stage.(*LabelManipulation); ok {
+						found = true
+						if lm.Operation != tt.wantOp {
+							t.Errorf("got operation %q, want %q", lm.Operation, tt.wantOp)
+						}
+						if len(lm.Labels) != len(tt.wantLabels) {
+							t.Errorf("got %d labels, want %d", len(lm.Labels), len(tt.wantLabels))
+						}
+						for i, label := range lm.Labels {
+							if i < len(tt.wantLabels) && label != tt.wantLabels[i] {
+								t.Errorf("label %d: got %q, want %q", i, label, tt.wantLabels[i])
+							}
+						}
+					}
+				}
+				if !found {
+					t.Error("expected LabelManipulation stage, but didn't find one")
+				}
+			}
+		})
+	}
+}
+
+func TestParseStringLiteral_Backticks(t *testing.T) {
+	tests := []struct {
+		name      string
+		input     string
+		wantValue string
+		wantLen   int
+	}{
+		{
+			name:      "double quotes",
+			input:     `"hello"`,
+			wantValue: "hello",
+			wantLen:   7,
+		},
+		{
+			name:      "backticks",
+			input:     "`hello`",
+			wantValue: "hello",
+			wantLen:   7,
+		},
+		{
+			name:      "backticks with special chars",
+			input:     "`replicator`",
+			wantValue: "replicator",
+			wantLen:   12,
+		},
+		{
+			name:      "double quotes with escapes",
+			input:     `"hello \"world\""`,
+			wantValue: `hello "world"`,
+			wantLen:   17,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			value, consumed := parseStringLiteral(tt.input)
+			if value != tt.wantValue {
+				t.Errorf("got value %q, want %q", value, tt.wantValue)
+			}
+			if consumed != tt.wantLen {
+				t.Errorf("got consumed %d, want %d", consumed, tt.wantLen)
+			}
+		})
+	}
+}

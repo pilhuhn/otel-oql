@@ -170,6 +170,12 @@ func (t *Translator) translatePipelineStage(stage PipelineStage) (string, error)
 		// Label filters after parsing also need application-layer processing
 		return "", nil
 
+	case *LabelManipulation:
+		// Label manipulation (drop/keep) doesn't affect SQL WHERE clause
+		// It only affects which labels are included in the result set
+		// For SQL translation, we can safely ignore these operators
+		return "", nil
+
 	default:
 		return "", fmt.Errorf("unsupported pipeline stage: %T", stage)
 	}

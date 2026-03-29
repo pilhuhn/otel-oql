@@ -446,3 +446,83 @@ func TestTranslateQuery_ScalarExpr(t *testing.T) {
 		})
 	}
 }
+
+func TestTranslateQuery_WithDrop(t *testing.T) {
+	tests := []struct {
+		name    string
+		logql   string
+		wantSQL string
+	}{
+		{
+			name:    "line filter with drop",
+			logql:   `{job="varlogs"} |= "error" | drop __error__`,
+			wantSQL: `SELECT * FROM otel_logs WHERE tenant_id = 0 AND job = 'varlogs' AND body LIKE '%error%'`,
+		},
+		{
+			name:    "count_over_time with drop",
+			logql:   `count_over_time({host_name="snert"} |= "replicator" | drop __error__[1m])`,
+			wantSQL: `SELECT COUNT(*) FROM otel_logs WHERE tenant_id = 0 AND host_name = 'snert' AND body LIKE '%replicator%' AND "timestamp" >= (now() - 60000)`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			translator := NewTranslator(0)
+			sqls, err := translator.TranslateQuery(tt.logql)
+
+			if err != nil {
+				t.Errorf("unexpected error: %v", err)
+				return
+			}
+
+			if len(sqls) != 1 {
+				t.Errorf("expected 1 SQL query, got %d", len(sqls))
+				return
+			}
+
+			if sqls[0] != tt.wantSQL {
+				t.Errorf("SQL mismatch:\ngot:  %s\nwant: %s", sqls[0], tt.wantSQL)
+			}
+		})
+	}
+}
+
+func TestTranslateQuery_WithBackticks(t *testing.T) {
+	tests := []struct {
+		name    string
+		logql   string
+		wantSQL string
+	}{
+		{
+			name:    "line filter with backticks",
+			logql:   "{job=\"varlogs\"} |= `error`",
+			wantSQL: `SELECT * FROM otel_logs WHERE tenant_id = 0 AND job = 'varlogs' AND body LIKE '%error%'`,
+		},
+		{
+			name:    "backticks and drop - Grafana query",
+			logql:   "{host_name=\"snert\"} |= `replicator` | drop __error__",
+			wantSQL: `SELECT * FROM otel_logs WHERE tenant_id = 0 AND host_name = 'snert' AND body LIKE '%replicator%'`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			translator := NewTranslator(0)
+			sqls, err := translator.TranslateQuery(tt.logql)
+
+			if err != nil {
+				t.Errorf("unexpected error: %v", err)
+				return
+			}
+
+			if len(sqls) != 1 {
+				t.Errorf("expected 1 SQL query, got %d", len(sqls))
+				return
+			}
+
+			if sqls[0] != tt.wantSQL {
+				t.Errorf("SQL mismatch:\ngot:  %s\nwant: %s", sqls[0], tt.wantSQL)
+			}
+		})
+	}
+}

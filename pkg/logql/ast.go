@@ -76,6 +76,14 @@ type LabelFilter struct {
 
 func (LabelFilter) pipelineStage() {}
 
+// LabelManipulation represents label manipulation: | drop label1, label2 | keep label3, label4
+type LabelManipulation struct {
+	Operation string   // "drop" or "keep"
+	Labels    []string // Labels to drop/keep
+}
+
+func (LabelManipulation) pipelineStage() {}
+
 // Aggregator represents an aggregation operation: sum by (label)
 type Aggregator struct {
 	Op       string   // sum, avg, min, max, count, etc.
