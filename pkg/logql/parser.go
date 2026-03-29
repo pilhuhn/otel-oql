@@ -189,8 +189,9 @@ func (p *Parser) parseMetricQueryCustom() (*Query, error) {
 		}
 	}
 
-	// Check for aggregations wrapping LogQL functions
+	// Check for aggregations wrapping LogQL functions or PromQL functions with pipeline stages
 	// Examples: sum by (level) (bytes_over_time({...}[5m]))
+	//           sum by (level) (count_over_time({...} |= "error" [5m]))
 	for _, agg := range []string{"sum", "avg", "min", "max", "count"} {
 		if strings.HasPrefix(input, agg+"(") || strings.HasPrefix(input, agg+" ") {
 			// Check if it contains a LogQL-specific function
@@ -200,7 +201,15 @@ func (p *Parser) parseMetricQueryCustom() (*Query, error) {
 					return p.parseAggregatedLogQLMetric(input)
 				}
 			}
-			// Not a LogQL-specific function, let PromQL parser handle it
+			// Check if it contains pipeline operators (which means PromQL parser can't handle it)
+			if strings.Contains(input, "|=") || strings.Contains(input, "|~") ||
+			   strings.Contains(input, "!=") || strings.Contains(input, "!~") ||
+			   strings.Contains(input, "| drop") || strings.Contains(input, "| keep") ||
+			   strings.Contains(input, "| json") || strings.Contains(input, "| logfmt") {
+				// PromQL function with pipeline stages - use custom parsing
+				return p.parseAggregatedLogQLMetric(input)
+			}
+			// Not a LogQL-specific function and no pipeline, let PromQL parser handle it
 			return nil, fmt.Errorf("custom aggregation parsing not yet implemented")
 		}
 	}
@@ -292,7 +301,8 @@ func (p *Parser) parseAggregatedLogQLMetric(input string) (*Query, error) {
 	innerFunc := strings.TrimSpace(input[lastSection.start+1 : lastSection.end])
 
 	// Parse the inner function using parseLogQLMetricFunction
-	for _, fn := range []string{"bytes_over_time", "bytes_rate"} {
+	// Support both LogQL-specific and PromQL functions with pipeline stages
+	for _, fn := range []string{"bytes_over_time", "bytes_rate", "count_over_time", "rate"} {
 		if strings.HasPrefix(innerFunc, fn+"(") {
 			innerQuery, err := p.parseLogQLMetricFunction(fn, innerFunc[len(fn)+1:])
 			if err != nil {

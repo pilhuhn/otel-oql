@@ -579,3 +579,63 @@ func TestConvertAggregateToMetricExpr(t *testing.T) {
 		})
 	}
 }
+
+func TestParse_AggregatedWithPipelineStages(t *testing.T) {
+	tests := []struct {
+		name    string
+		input   string
+		wantErr bool
+	}{
+		{
+			name:    "sum by with count_over_time and pipeline - Grafana query",
+			input:   `sum by (level, detected_level) (count_over_time({host_name="snert"} |= ` + "`replicator`" + ` | drop __error__[1m]))`,
+			wantErr: false,
+		},
+		{
+			name:    "avg by with rate and pipeline",
+			input:   `avg by (service) (rate({job="api"} |= "error" [5m]))`,
+			wantErr: false,
+		},
+		{
+			name:    "count with bytes_over_time and drop",
+			input:   `count(bytes_over_time({level="info"} | drop level[10m]))`,
+			wantErr: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			parser := NewParser(tt.input)
+			query, err := parser.Parse()
+
+			if tt.wantErr {
+				if err == nil {
+					t.Errorf("expected error, got nil")
+				}
+				return
+			}
+
+			if err != nil {
+				t.Errorf("unexpected error: %v", err)
+				return
+			}
+
+			if query == nil {
+				t.Errorf("expected query, got nil")
+				return
+			}
+
+			// Verify it's a MetricExpr
+			metricExpr, ok := query.Expr.(*MetricExpr)
+			if !ok {
+				t.Errorf("expected MetricExpr, got %T", query.Expr)
+				return
+			}
+
+			// Verify aggregator was parsed
+			if metricExpr.Aggregator == nil {
+				t.Errorf("expected aggregator, got nil")
+			}
+		})
+	}
+}
