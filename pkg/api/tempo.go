@@ -11,6 +11,20 @@ import (
 	"github.com/pilhuhn/otel-oql/pkg/traceql"
 )
 
+// TempoEchoResponse represents the response for /api/echo
+type TempoEchoResponse struct {
+	Message string `json:"message"`
+}
+
+// handleTempoEcho handles GET /api/echo
+// Health check endpoint used by Grafana to test datasource connectivity
+func (s *Server) handleTempoEcho(w http.ResponseWriter, r *http.Request) {
+	response := TempoEchoResponse{
+		Message: "ok",
+	}
+	writeJSON(w, http.StatusOK, response)
+}
+
 // TempoTagsResponse represents the response for /api/v2/search/tags
 type TempoTagsResponse struct {
 	TagNames []string `json:"tagNames"`

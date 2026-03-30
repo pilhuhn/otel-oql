@@ -2,9 +2,35 @@ package api
 
 import (
 	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 )
+
+func TestTempoEcho(t *testing.T) {
+	s := &Server{}
+
+	req := httptest.NewRequest("GET", "/api/echo", nil)
+	w := httptest.NewRecorder()
+
+	s.handleTempoEcho(w, req)
+
+	resp := w.Result()
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("Expected status 200, got %d", resp.StatusCode)
+	}
+
+	var echoResp TempoEchoResponse
+	if err := json.NewDecoder(resp.Body).Decode(&echoResp); err != nil {
+		t.Fatalf("Failed to decode response: %v", err)
+	}
+
+	if echoResp.Message != "ok" {
+		t.Errorf("Expected message 'ok', got %q", echoResp.Message)
+	}
+}
 
 func TestTempoEndpoints(t *testing.T) {
 	s := &Server{}

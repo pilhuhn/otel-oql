@@ -62,6 +62,7 @@ func (s *Server) Start(ctx context.Context) error {
 	mux.HandleFunc("/loki/api/v1/label/", s.validator.HTTPMiddleware(http.HandlerFunc(s.handleLokiLabelValues)).ServeHTTP)
 
 	// Tempo-compatible endpoints for TraceQL
+	mux.HandleFunc("/api/echo", s.handleTempoEcho) // Health check endpoint (no auth required)
 	mux.Handle("/api/v2/search", s.validator.HTTPMiddleware(http.HandlerFunc(s.handleTempoSearch)))
 	mux.Handle("/api/v2/search/tags", s.validator.HTTPMiddleware(http.HandlerFunc(s.handleTempoSearchTags)))
 	mux.HandleFunc("/api/v2/search/tag/", s.validator.HTTPMiddleware(http.HandlerFunc(s.handleTempoSearchTagValues)).ServeHTTP)

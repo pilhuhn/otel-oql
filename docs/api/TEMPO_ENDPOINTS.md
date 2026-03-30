@@ -11,7 +11,32 @@ OTEL-OQL now provides Tempo API v2 endpoints that enable:
 
 ## Available Endpoints
 
-### 1. `/api/v2/search` - Execute TraceQL Queries
+### 1. `/api/echo` - Health Check
+
+Simple health check endpoint used by Grafana to test datasource connectivity.
+
+**Request**:
+```bash
+GET /api/echo
+```
+
+**Response**:
+```json
+{
+  "message": "ok"
+}
+```
+
+**Example**:
+```bash
+curl 'http://localhost:8080/api/echo'
+```
+
+**Note**: This endpoint does **not** require authentication (no `X-Tenant-ID` header needed).
+
+---
+
+### 2. `/api/v2/search` - Execute TraceQL Queries
 
 Main search endpoint for executing TraceQL queries.
 
@@ -57,7 +82,7 @@ curl 'http://localhost:8080/api/v2/search?q={resource.service.name = "checkout"}
 
 ---
 
-### 2. `/api/v2/search/tags` - List Available Tags
+### 3. `/api/v2/search/tags` - List Available Tags
 
 Returns list of all available TraceQL tags/fields for autocomplete.
 
@@ -114,7 +139,7 @@ curl 'http://localhost:8080/api/v2/search/tags' \
 
 ---
 
-### 3. `/api/v2/search/tag/{tagName}/values` - Get Tag Values
+### 4. `/api/v2/search/tag/{tagName}/values` - Get Tag Values
 
 Returns distinct values for a specific tag, used for autocomplete dropdowns.
 
