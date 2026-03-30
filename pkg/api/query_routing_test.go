@@ -114,12 +114,47 @@ func TestQueryLanguageRouting(t *testing.T) {
 			errContain: "unclosed stream selector",
 		},
 		{
-			name: "TraceQL query (not yet implemented)",
+			name: "TraceQL query - simple duration filter",
 			execFunc: func() ([]string, error) {
-				return s.executeTraceQLQuery(ctx, "{ duration > 1s }", tenantID)
+				return s.executeTraceQLQuery(ctx, "{duration > 100ms}", tenantID)
+			},
+			wantErr: false,
+		},
+		{
+			name: "TraceQL query - span attribute",
+			execFunc: func() ([]string, error) {
+				return s.executeTraceQLQuery(ctx, "{span.http.status_code = 500}", tenantID)
+			},
+			wantErr: false,
+		},
+		{
+			name: "TraceQL query - resource attribute",
+			execFunc: func() ([]string, error) {
+				return s.executeTraceQLQuery(ctx, `{resource.service.name = "api"}`, tenantID)
+			},
+			wantErr: false,
+		},
+		{
+			name: "TraceQL query - multiple conditions",
+			execFunc: func() ([]string, error) {
+				return s.executeTraceQLQuery(ctx, "{span.http.status_code = 500 && duration > 100ms}", tenantID)
+			},
+			wantErr: false,
+		},
+		{
+			name: "TraceQL query - aggregation",
+			execFunc: func() ([]string, error) {
+				return s.executeTraceQLQuery(ctx, "count() by (span.http.method)", tenantID)
+			},
+			wantErr: false,
+		},
+		{
+			name: "TraceQL query - invalid syntax",
+			execFunc: func() ([]string, error) {
+				return s.executeTraceQLQuery(ctx, "{duration > 100ms", tenantID)
 			},
 			wantErr:    true,
-			errContain: "not yet implemented",
+			errContain: "expected '}'",
 		},
 	}
 
@@ -221,6 +256,99 @@ func TestPromQLTranslation(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			queries, err := s.executePromQLQuery(ctx, tt.promql, tt.tenantID)
+			if err != nil {
+				t.Fatalf("Unexpected error: %v", err)
+			}
+
+			if len(queries) == 0 {
+				t.Fatal("No SQL queries returned")
+			}
+
+			sql := queries[0]
+			for _, want := range tt.wantContains {
+				if !strings.Contains(sql, want) {
+					t.Errorf("SQL should contain %q\nGot: %s", want, sql)
+				}
+			}
+		})
+	}
+}
+
+// TestTraceQLTranslation verifies that TraceQL translates to reasonable SQL
+func TestTraceQLTranslation(t *testing.T) {
+	s := &Server{}
+	ctx := context.Background()
+
+	tests := []struct {
+		name         string
+		traceql      string
+		tenantID     int
+		wantContains []string
+	}{
+		{
+			name:     "simple duration filter with tenant 0",
+			traceql:  "{duration > 100ms}",
+			tenantID: 0,
+			wantContains: []string{
+				"SELECT * FROM otel_spans",
+				"tenant_id = 0",
+				"duration > 100000000", // 100ms in nanoseconds
+			},
+		},
+		{
+			name:     "span attribute with tenant 42",
+			traceql:  "{span.http.status_code = 500}",
+			tenantID: 42,
+			wantContains: []string{
+				"otel_spans",
+				"tenant_id = 42",
+				"http_status_code = 500",
+			},
+		},
+		{
+			name:     "resource attribute",
+			traceql:  `{resource.service.name = "checkout"}`,
+			tenantID: 0,
+			wantContains: []string{
+				"otel_spans",
+				"service_name = 'checkout'",
+			},
+		},
+		{
+			name:     "multiple conditions",
+			traceql:  "{span.http.status_code = 500 && duration > 100ms}",
+			tenantID: 0,
+			wantContains: []string{
+				"otel_spans",
+				"http_status_code = 500",
+				"duration > 100000000",
+			},
+		},
+		{
+			name:     "aggregation by span attribute",
+			traceql:  "count() by (span.http.method)",
+			tenantID: 0,
+			wantContains: []string{
+				"SELECT http_method, COUNT(*)",
+				"FROM otel_spans",
+				"GROUP BY http_method",
+			},
+		},
+		{
+			name:     "aggregation by resource attribute",
+			traceql:  "count() by (resource.service.name)",
+			tenantID: 0,
+			wantContains: []string{
+				"SELECT service_name, COUNT(*)",
+				"FROM otel_spans",
+				"GROUP BY service_name",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			queries, err := s.executeTraceQLQuery(ctx, tt.traceql, tt.tenantID)
 			if err != nil {
 				t.Fatalf("Unexpected error: %v", err)
 			}

@@ -15,6 +15,7 @@ import (
 	"github.com/pilhuhn/otel-oql/pkg/promql"
 	"github.com/pilhuhn/otel-oql/pkg/sqlutil"
 	"github.com/pilhuhn/otel-oql/pkg/tenant"
+	"github.com/pilhuhn/otel-oql/pkg/traceql"
 	"github.com/pilhuhn/otel-oql/pkg/translator"
 )
 
@@ -717,6 +718,25 @@ func (s *Server) executeLogQLQuery(ctx context.Context, query string, tenantID i
 
 // executeTraceQLQuery handles TraceQL query execution
 func (s *Server) executeTraceQLQuery(ctx context.Context, query string, tenantID int) ([]string, error) {
-	// TODO: Implement TraceQL support
-	return nil, fmt.Errorf("TraceQL support not yet implemented")
+	if s.debugQuery {
+		fmt.Printf("[DEBUG QUERY] TraceQL query received (tenant_id=%d): %s\n", tenantID, query)
+	}
+
+	translator := traceql.NewTranslator(tenantID)
+	sqlQueries, err := translator.TranslateQuery(query)
+	if err != nil {
+		if s.debugQuery {
+			fmt.Printf("[DEBUG QUERY] TraceQL translation failed: %v\n", err)
+		}
+		return nil, fmt.Errorf("TraceQL translation error: %w", err)
+	}
+
+	if s.debugTranslation {
+		fmt.Printf("[DEBUG TRANSLATION] TraceQL query translated to %d SQL statements:\n", len(sqlQueries))
+		for i, sql := range sqlQueries {
+			fmt.Printf("[DEBUG TRANSLATION]   [%d] %s\n", i+1, sql)
+		}
+	}
+
+	return sqlQueries, nil
 }
