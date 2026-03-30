@@ -2,14 +2,22 @@ package api
 
 import (
 	"context"
+	"encoding/hex"
 	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/pilhuhn/otel-oql/pkg/sqlutil"
 	"github.com/pilhuhn/otel-oql/pkg/tenant"
 	"github.com/pilhuhn/otel-oql/pkg/traceql"
+
+	common "go.opentelemetry.io/proto/otlp/common/v1"
+	collectortrace "go.opentelemetry.io/proto/otlp/collector/trace/v1"
+	resource "go.opentelemetry.io/proto/otlp/resource/v1"
+	tracepb "go.opentelemetry.io/proto/otlp/trace/v1"
+	"google.golang.org/protobuf/proto"
 )
 
 // TempoEchoResponse represents the response for /api/echo
@@ -448,15 +456,46 @@ func (s *Server) transformToTempoTraces(results []QueryResult) []TempoTrace {
 			}
 
 			// Calculate trace time bounds
-			if ts, ok := span["timestamp"].(int64); ok {
-				if minStartTime == 0 || ts < minStartTime {
-					minStartTime = ts
+			var tsMillis int64
+			if tsVal := span["timestamp"]; tsVal != nil {
+				switch v := tsVal.(type) {
+				case int64:
+					tsMillis = v
+				case int:
+					tsMillis = int64(v)
+				case float64:
+					tsMillis = int64(v)
+				case string:
+					if parsed, err := strconv.ParseInt(v, 10, 64); err == nil {
+						tsMillis = parsed
+					}
 				}
 			}
 
-			if duration, ok := span["duration"].(int64); ok {
-				if ts, ok := span["timestamp"].(int64); ok {
-					endTime := ts + (duration / 1000000) // Convert nanos to millis
+			if tsMillis > 0 {
+				if minStartTime == 0 || tsMillis < minStartTime {
+					minStartTime = tsMillis
+				}
+
+				// Calculate end time
+				var durationNanos int64
+				if durationVal := span["duration"]; durationVal != nil {
+					switch v := durationVal.(type) {
+					case int64:
+						durationNanos = v
+					case int:
+						durationNanos = int64(v)
+					case float64:
+						durationNanos = int64(v)
+					case string:
+						if parsed, err := strconv.ParseInt(v, 10, 64); err == nil {
+							durationNanos = parsed
+						}
+					}
+				}
+
+				if durationNanos > 0 {
+					endTime := tsMillis + (durationNanos / 1000000) // Convert nanos to millis
 					if endTime > maxEndTime {
 						maxEndTime = endTime
 					}
@@ -483,8 +522,7 @@ func (s *Server) transformToTempoTraces(results []QueryResult) []TempoTrace {
 
 // TempoV1SearchResponse represents the response for /api/search (v1 API)
 type TempoV1SearchResponse struct {
-	Traces   []TempoV1Trace `json:"traces"`
-	Metadata TempoMetadata  `json:"metadata,omitempty"`
+	Traces []TempoV1Trace `json:"traces"`
 }
 
 // TempoV1Trace represents a trace in v1 search results
@@ -550,19 +588,11 @@ func (s *Server) handleTempoV1Search(w http.ResponseWriter, r *http.Request) {
 			tenantID, q, limit, startTime, endTime)
 	}
 
-	// If query is empty or just "{}", return metadata with service names
+	// If query is empty or just "{}", return empty traces
+	// (Grafana gets metadata from /api/v2/search/tags endpoints instead)
 	if q == "" || q == "{}" {
-		metadata, err := s.getTempoMetadata(ctx, tenantID, startTime, endTime)
-		if err != nil {
-			s.obs.RecordError(ctx, "metadata_error", "tempo_api")
-			s.obs.RecordRequest(ctx, "/api/search", time.Since(start), http.StatusInternalServerError)
-			http.Error(w, fmt.Sprintf("failed to get metadata: %v", err), http.StatusInternalServerError)
-			return
-		}
-
 		response := TempoV1SearchResponse{
-			Traces:   []TempoV1Trace{}, // Empty traces list
-			Metadata: *metadata,
+			Traces: []TempoV1Trace{}, // Empty traces list
 		}
 
 		s.obs.RecordRequest(ctx, "/api/search", time.Since(start), http.StatusOK)
@@ -735,16 +765,47 @@ func (s *Server) transformToTempoV1Traces(results []QueryResult) []TempoV1Trace 
 				rootServiceName = service
 			}
 
-			// Calculate trace time bounds
-			if ts, ok := span["timestamp"].(int64); ok {
-				if minStartTime == 0 || ts < minStartTime {
-					minStartTime = ts
+			// Calculate trace time bounds - handle multiple types from Pinot
+			var tsMillis int64
+			if tsVal := span["timestamp"]; tsVal != nil {
+				switch v := tsVal.(type) {
+				case int64:
+					tsMillis = v
+				case int:
+					tsMillis = int64(v)
+				case float64:
+					tsMillis = int64(v)
+				case string:
+					if parsed, err := strconv.ParseInt(v, 10, 64); err == nil {
+						tsMillis = parsed
+					}
 				}
 			}
 
-			if duration, ok := span["duration"].(int64); ok {
-				if ts, ok := span["timestamp"].(int64); ok {
-					endTime := ts + (duration / 1000000) // Convert nanos to millis
+			if tsMillis > 0 {
+				if minStartTime == 0 || tsMillis < minStartTime {
+					minStartTime = tsMillis
+				}
+
+				// Calculate end time
+				var durationNanos int64
+				if durationVal := span["duration"]; durationVal != nil {
+					switch v := durationVal.(type) {
+					case int64:
+						durationNanos = v
+					case int:
+						durationNanos = int64(v)
+					case float64:
+						durationNanos = int64(v)
+					case string:
+						if parsed, err := strconv.ParseInt(v, 10, 64); err == nil {
+							durationNanos = parsed
+						}
+					}
+				}
+
+				if durationNanos > 0 {
+					endTime := tsMillis + (durationNanos / 1000000) // Convert nanos to millis
 					if endTime > maxEndTime {
 						maxEndTime = endTime
 					}
@@ -770,4 +831,773 @@ func (s *Server) transformToTempoV1Traces(results []QueryResult) []TempoV1Trace 
 	}
 
 	return traces
+}
+
+// TempoTraceResponse represents the response for /api/traces/{traceID}
+// Uses OTLP structure with resourceSpans and scopeSpans
+type TempoTraceResponse struct {
+	ResourceSpans []TempoResourceSpans `json:"resourceSpans"`
+}
+
+// TempoTraceResponseV1 represents the v1 response format with batches
+type TempoTraceResponseV1 struct {
+	Batches []TempoBatch `json:"batches"`
+}
+
+// TempoBatch represents a batch in the v1 format (same structure as resourceSpans)
+type TempoBatch struct {
+	Resource   TempoResource     `json:"resource"`
+	ScopeSpans []TempoScopeSpans `json:"scopeSpans"`
+}
+
+// TempoResourceSpans represents spans from a single resource
+type TempoResourceSpans struct {
+	Resource   TempoResource   `json:"resource"`
+	ScopeSpans []TempoScopeSpans `json:"scopeSpans"`
+}
+
+// TempoScopeSpans represents spans from a single instrumentation scope
+type TempoScopeSpans struct {
+	Scope TempoScope       `json:"scope,omitempty"`
+	Spans []TempoTraceSpan `json:"spans"`
+}
+
+// TempoScope represents instrumentation scope (library) info
+type TempoScope struct {
+	Name    string `json:"name,omitempty"`
+	Version string `json:"version,omitempty"`
+}
+
+// TempoResource represents resource attributes
+type TempoResource struct {
+	Attributes []TempoAttribute `json:"attributes,omitempty"`
+}
+
+// TempoTraceSpan represents a full span with all details
+type TempoTraceSpan struct {
+	TraceID           string           `json:"traceId"`
+	SpanID            string           `json:"spanId"`
+	ParentSpanID      string           `json:"parentSpanId,omitempty"`
+	Name              string           `json:"name"`
+	Kind              string           `json:"kind,omitempty"`
+	StartTimeUnixNano string           `json:"startTimeUnixNano"`
+	DurationNanos     string           `json:"durationNanos"`
+	Attributes        []TempoAttribute `json:"attributes,omitempty"`
+	Status            TempoStatus      `json:"status,omitempty"`
+}
+
+// TempoAttribute represents a key-value attribute in OTLP format
+type TempoAttribute struct {
+	Key   string         `json:"key"`
+	Value TempoAnyValue  `json:"value"`
+}
+
+// TempoAnyValue represents an OTLP AnyValue (type-wrapped value)
+type TempoAnyValue struct {
+	StringValue *string  `json:"stringValue,omitempty"`
+	IntValue    *int64   `json:"intValue,omitempty"`
+	DoubleValue *float64 `json:"doubleValue,omitempty"`
+	BoolValue   *bool    `json:"boolValue,omitempty"`
+}
+
+// Helper functions to create TempoAnyValue
+func stringValue(s string) TempoAnyValue {
+	return TempoAnyValue{StringValue: &s}
+}
+
+func intValue(i int64) TempoAnyValue {
+	return TempoAnyValue{IntValue: &i}
+}
+
+func intValueFromInt(i int) TempoAnyValue {
+	val := int64(i)
+	return TempoAnyValue{IntValue: &val}
+}
+
+func boolValue(b bool) TempoAnyValue {
+	return TempoAnyValue{BoolValue: &b}
+}
+
+// TempoStatus represents span status
+type TempoStatus struct {
+	Code    string `json:"code,omitempty"`
+	Message string `json:"message,omitempty"`
+}
+
+// handleTempoTraceByID handles GET /api/traces/{traceID}
+// Returns full trace details with all spans
+func (s *Server) handleTempoTraceByID(w http.ResponseWriter, r *http.Request) {
+	start := time.Now()
+	ctx, span := s.obs.Tracer().Start(r.Context(), "api.tempo.trace_by_id")
+	defer span.End()
+
+	// Get tenant ID from context
+	tenantID, ok := tenant.FromContext(r.Context())
+	if !ok {
+		s.obs.RecordError(ctx, "missing_tenant_id", "tempo_api")
+		s.obs.RecordRequest(ctx, "/api/traces/*", time.Since(start), http.StatusUnauthorized)
+		http.Error(w, "tenant-id not found", http.StatusUnauthorized)
+		return
+	}
+
+	// Extract trace ID from URL path
+	// Path can be /api/traces/{traceID} (v1) or /api/v2/traces/{traceID} (v2)
+	path := r.URL.Path
+	var traceID string
+	var isV2 bool
+
+	if strings.HasPrefix(path, "/api/v2/traces/") {
+		traceID = path[len("/api/v2/traces/"):]
+		isV2 = true
+	} else if strings.HasPrefix(path, "/api/traces/") {
+		traceID = path[len("/api/traces/"):]
+		isV2 = false
+	} else {
+		s.obs.RecordRequest(ctx, "/api/traces/*", time.Since(start), http.StatusBadRequest)
+		http.Error(w, "invalid path", http.StatusBadRequest)
+		return
+	}
+
+	if traceID == "" {
+		s.obs.RecordRequest(ctx, "/api/traces/*", time.Since(start), http.StatusBadRequest)
+		http.Error(w, "missing trace ID", http.StatusBadRequest)
+		return
+	}
+
+	if s.debugQuery {
+		fmt.Printf("[DEBUG QUERY] Tempo get trace by ID (tenant_id=%d, traceID=%s)\n", tenantID, traceID)
+	}
+
+	// Build SQL to get all spans for this trace
+	sql := fmt.Sprintf(
+		"SELECT * FROM otel_spans WHERE tenant_id = %d AND trace_id = %s ORDER BY \"timestamp\" ASC",
+		tenantID,
+		sqlutil.StringLiteral(traceID),
+	)
+
+	if s.debugTranslation {
+		fmt.Printf("[DEBUG TRANSLATION] Trace by ID SQL: %s\n", sql)
+	}
+
+	// Execute query against Pinot
+	results, err := s.executeQueries(ctx, []string{sql})
+	if err != nil {
+		s.obs.RecordError(ctx, "execution_error", "tempo_api")
+		s.obs.RecordRequest(ctx, "/api/traces/*", time.Since(start), http.StatusInternalServerError)
+		http.Error(w, fmt.Sprintf("query execution failed: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	// Check if trace was found
+	if len(results) == 0 || len(results[0].Rows) == 0 {
+		s.obs.RecordRequest(ctx, "/api/traces/*", time.Since(start), http.StatusNotFound)
+		http.Error(w, "trace not found", http.StatusNotFound)
+		return
+	}
+
+	// Check Accept header to determine response format
+	acceptHeader := r.Header.Get("Accept")
+	wantsProtobuf := strings.Contains(acceptHeader, "application/protobuf")
+
+	if wantsProtobuf {
+		// Grafana requests protobuf - return OTLP ExportTraceServiceRequest format
+		traceRequest := s.transformToOTLPProtobuf(results[0])
+
+		if s.debugQuery {
+			fmt.Printf("[DEBUG] Protobuf ExportTraceServiceRequest: %d resourceSpans\n", len(traceRequest.ResourceSpans))
+			if len(traceRequest.ResourceSpans) > 0 {
+				fmt.Printf("[DEBUG]   ResourceSpans[0]: %d scopeSpans\n", len(traceRequest.ResourceSpans[0].ScopeSpans))
+				if len(traceRequest.ResourceSpans[0].ScopeSpans) > 0 {
+					fmt.Printf("[DEBUG]     ScopeSpans[0]: %d spans\n", len(traceRequest.ResourceSpans[0].ScopeSpans[0].Spans))
+					if len(traceRequest.ResourceSpans[0].ScopeSpans[0].Spans) > 0 {
+						span := traceRequest.ResourceSpans[0].ScopeSpans[0].Spans[0]
+						fmt.Printf("[DEBUG]       Span[0]: traceId len=%d, spanId len=%d, name=%s, kind=%d, startTime=%d, endTime=%d, status=%d\n",
+							len(span.TraceId), len(span.SpanId), span.Name, span.Kind, span.StartTimeUnixNano, span.EndTimeUnixNano, span.Status.Code)
+					}
+				}
+			}
+		}
+
+		data, err := proto.Marshal(traceRequest)
+		if err != nil {
+			s.obs.RecordError(ctx, "protobuf_marshal_error", "tempo_api")
+			s.obs.RecordRequest(ctx, "/api/traces/*", time.Since(start), http.StatusInternalServerError)
+			http.Error(w, fmt.Sprintf("failed to marshal protobuf: %v", err), http.StatusInternalServerError)
+			return
+		}
+
+		if s.debugQuery {
+			fmt.Printf("[DEBUG] Marshaled protobuf: %d bytes\n", len(data))
+		}
+
+		w.Header().Set("Content-Type", "application/protobuf")
+		w.Header().Set("Content-Length", fmt.Sprintf("%d", len(data)))
+		w.WriteHeader(http.StatusOK)
+		written, err := w.Write(data)
+		if err != nil {
+			fmt.Printf("[ERROR] Failed to write protobuf response: %v\n", err)
+		}
+		if s.debugQuery {
+			fmt.Printf("[DEBUG] Wrote %d bytes of protobuf data\n", written)
+		}
+		s.obs.RecordRequest(ctx, "/api/traces/*", time.Since(start), http.StatusOK)
+	} else {
+		// JSON response for other clients (Perses, curl, etc.)
+		if isV2 {
+			// v2 API: OTLP format with resourceSpans
+			trace := s.transformToTempoTraceV2(results[0])
+			s.obs.RecordRequest(ctx, "/api/traces/*", time.Since(start), http.StatusOK)
+			writeJSON(w, http.StatusOK, trace)
+		} else {
+			// v1 API: Tempo format with batches
+			trace := s.transformToTempoTraceV1(results[0])
+			s.obs.RecordRequest(ctx, "/api/traces/*", time.Since(start), http.StatusOK)
+			writeJSON(w, http.StatusOK, trace)
+		}
+	}
+}
+
+
+// transformToTempoTraceV1 transforms Pinot query results to Tempo v1 trace format (batches)
+func (s *Server) transformToTempoTraceV1(result QueryResult) TempoTraceResponseV1 {
+	// Create resource with attributes
+	resource := TempoResource{
+		Attributes: []TempoAttribute{},
+	}
+
+	// Create scope spans (single scope for now)
+	scopeSpans := TempoScopeSpans{
+		Scope: TempoScope{},
+		Spans: []TempoTraceSpan{},
+	}
+
+	// Convert each row to a span
+	for _, row := range result.Rows {
+		if len(row) < len(result.Columns) {
+			continue
+		}
+
+		// Create map of column name to value
+		spanData := make(map[string]interface{})
+		for i, col := range result.Columns {
+			spanData[col] = row[i]
+		}
+
+		// Build span
+		span := s.buildTempoTraceSpan(spanData)
+		scopeSpans.Spans = append(scopeSpans.Spans, span)
+
+		// Extract resource attributes (from first span)
+		if len(resource.Attributes) == 0 {
+			if serviceName, ok := spanData["service_name"].(string); ok && serviceName != "" {
+				resource.Attributes = append(resource.Attributes, TempoAttribute{
+					Key:   "service.name",
+					Value: stringValue(serviceName),
+				})
+			}
+		}
+	}
+
+	// Build batch with nested scopeSpans
+	batch := TempoBatch{
+		Resource:   resource,
+		ScopeSpans: []TempoScopeSpans{scopeSpans},
+	}
+
+	return TempoTraceResponseV1{
+		Batches: []TempoBatch{batch},
+	}
+}
+
+// transformToTempoTraceV2 transforms Pinot query results to OTLP v2 trace format (resourceSpans)
+func (s *Server) transformToTempoTraceV2(result QueryResult) TempoTraceResponse {
+	// Create resource with attributes
+	resource := TempoResource{
+		Attributes: []TempoAttribute{},
+	}
+
+	// Create scope spans (single scope for now)
+	scopeSpans := TempoScopeSpans{
+		Scope: TempoScope{},
+		Spans: []TempoTraceSpan{},
+	}
+
+	// Convert each row to a span
+	for _, row := range result.Rows {
+		if len(row) < len(result.Columns) {
+			continue
+		}
+
+		// Create map of column name to value
+		spanData := make(map[string]interface{})
+		for i, col := range result.Columns {
+			spanData[col] = row[i]
+		}
+
+		// Build span
+		span := s.buildTempoTraceSpan(spanData)
+		scopeSpans.Spans = append(scopeSpans.Spans, span)
+
+		// Extract resource attributes (from first span)
+		if len(resource.Attributes) == 0 {
+			if serviceName, ok := spanData["service_name"].(string); ok && serviceName != "" {
+				resource.Attributes = append(resource.Attributes, TempoAttribute{
+					Key:   "service.name",
+					Value: stringValue(serviceName),
+				})
+			}
+		}
+	}
+
+	// Build OTLP-compatible response
+	return TempoTraceResponse{
+		ResourceSpans: []TempoResourceSpans{
+			{
+				Resource:   resource,
+				ScopeSpans: []TempoScopeSpans{scopeSpans},
+			},
+		},
+	}
+}
+
+// transformToOTLPProtobuf converts Pinot query results to OTLP protobuf format
+// This is used when Grafana requests protobuf (Accept: application/protobuf)
+func (s *Server) transformToOTLPProtobuf(result QueryResult) *collectortrace.ExportTraceServiceRequest {
+	resourceSpans := &tracepb.ResourceSpans{
+		Resource: &resource.Resource{
+			Attributes: []*common.KeyValue{},
+		},
+		ScopeSpans: []*tracepb.ScopeSpans{
+			{
+				Scope: &common.InstrumentationScope{},
+				Spans: []*tracepb.Span{},
+			},
+		},
+	}
+
+	// Convert each row to a span
+	for _, row := range result.Rows {
+		if len(row) < len(result.Columns) {
+			continue
+		}
+
+		// Create map of column name to value
+		spanData := make(map[string]interface{})
+		for i, col := range result.Columns {
+			spanData[col] = row[i]
+		}
+
+		// Build OTLP span
+		span := s.buildOTLPSpan(spanData)
+		if span != nil {
+			resourceSpans.ScopeSpans[0].Spans = append(resourceSpans.ScopeSpans[0].Spans, span)
+		}
+
+		// Extract resource attributes (from first span)
+		if len(resourceSpans.Resource.Attributes) == 0 {
+			if serviceName, ok := spanData["service_name"].(string); ok && serviceName != "" {
+				resourceSpans.Resource.Attributes = append(resourceSpans.Resource.Attributes, &common.KeyValue{
+					Key: "service.name",
+					Value: &common.AnyValue{
+						Value: &common.AnyValue_StringValue{
+							StringValue: serviceName,
+						},
+					},
+				})
+			}
+		}
+	}
+
+	return &collectortrace.ExportTraceServiceRequest{
+		ResourceSpans: []*tracepb.ResourceSpans{resourceSpans},
+	}
+}
+
+// buildOTLPSpan creates an OTLP protobuf Span from Pinot span data
+func (s *Server) buildOTLPSpan(spanData map[string]interface{}) *tracepb.Span {
+	span := &tracepb.Span{
+		Attributes: []*common.KeyValue{},
+		Status:     &tracepb.Status{},
+	}
+
+	// Extract trace_id (hex string -> bytes, must be exactly 16 bytes)
+	if traceID, ok := spanData["trace_id"].(string); ok && traceID != "" {
+		traceIDBytes, err := hex.DecodeString(traceID)
+		if err == nil && len(traceIDBytes) == 16 {
+			span.TraceId = traceIDBytes
+		} else if s.debugQuery {
+			fmt.Printf("[DEBUG] Invalid trace_id: %s (decoded len=%d, error=%v)\n", traceID, len(traceIDBytes), err)
+		}
+	}
+
+	// Extract span_id (hex string -> bytes, must be exactly 8 bytes)
+	if spanID, ok := spanData["span_id"].(string); ok && spanID != "" {
+		spanIDBytes, err := hex.DecodeString(spanID)
+		if err == nil && len(spanIDBytes) == 8 {
+			span.SpanId = spanIDBytes
+		} else if s.debugQuery {
+			fmt.Printf("[DEBUG] Invalid span_id: %s (decoded len=%d, error=%v)\n", spanID, len(spanIDBytes), err)
+		}
+	}
+
+	// Extract parent_span_id (hex string -> bytes, must be exactly 8 bytes)
+	if parentSpanID, ok := spanData["parent_span_id"].(string); ok && parentSpanID != "" {
+		parentSpanIDBytes, err := hex.DecodeString(parentSpanID)
+		if err == nil && len(parentSpanIDBytes) == 8 {
+			span.ParentSpanId = parentSpanIDBytes
+		} else if s.debugQuery && parentSpanID != "" {
+			fmt.Printf("[DEBUG] Invalid parent_span_id: %s (decoded len=%d, error=%v)\n", parentSpanID, len(parentSpanIDBytes), err)
+		}
+	}
+
+	// Extract name
+	if name, ok := spanData["name"].(string); ok {
+		span.Name = name
+	}
+
+	// Extract kind (Pinot stores as "Server", "Client", etc.)
+	if kind, ok := spanData["kind"].(string); ok {
+		switch kind {
+		case "Internal", "SPAN_KIND_INTERNAL":
+			span.Kind = tracepb.Span_SPAN_KIND_INTERNAL
+		case "Server", "SPAN_KIND_SERVER":
+			span.Kind = tracepb.Span_SPAN_KIND_SERVER
+		case "Client", "SPAN_KIND_CLIENT":
+			span.Kind = tracepb.Span_SPAN_KIND_CLIENT
+		case "Producer", "SPAN_KIND_PRODUCER":
+			span.Kind = tracepb.Span_SPAN_KIND_PRODUCER
+		case "Consumer", "SPAN_KIND_CONSUMER":
+			span.Kind = tracepb.Span_SPAN_KIND_CONSUMER
+		default:
+			span.Kind = tracepb.Span_SPAN_KIND_UNSPECIFIED
+		}
+	}
+
+	// Extract timestamp (milliseconds -> nanoseconds uint64)
+	var startTimeNanos uint64
+	if tsVal := spanData["timestamp"]; tsVal != nil {
+		var tsMillis int64
+		switch v := tsVal.(type) {
+		case int64:
+			tsMillis = v
+		case int:
+			tsMillis = int64(v)
+		case float64:
+			tsMillis = int64(v)
+		case string:
+			if parsed, err := strconv.ParseInt(v, 10, 64); err == nil {
+				tsMillis = parsed
+			}
+		}
+		if tsMillis > 0 {
+			startTimeNanos = uint64(tsMillis * 1000000)
+			span.StartTimeUnixNano = startTimeNanos
+		}
+	}
+
+	// Extract duration and calculate end time
+	if durationVal := spanData["duration"]; durationVal != nil {
+		var durationNanos int64
+		switch v := durationVal.(type) {
+		case int64:
+			durationNanos = v
+		case int:
+			durationNanos = int64(v)
+		case float64:
+			durationNanos = int64(v)
+		case string:
+			if parsed, err := strconv.ParseInt(v, 10, 64); err == nil {
+				durationNanos = parsed
+			}
+		}
+		if durationNanos > 0 && startTimeNanos > 0 {
+			span.EndTimeUnixNano = startTimeNanos + uint64(durationNanos)
+		}
+	}
+
+	// Extract status (Pinot stores as "Ok", "Error", "Unset")
+	if statusCode, ok := spanData["status_code"].(string); ok {
+		switch statusCode {
+		case "Ok", "STATUS_CODE_OK":
+			span.Status.Code = tracepb.Status_STATUS_CODE_OK
+		case "Error", "STATUS_CODE_ERROR":
+			span.Status.Code = tracepb.Status_STATUS_CODE_ERROR
+		default:
+			span.Status.Code = tracepb.Status_STATUS_CODE_UNSET
+		}
+	}
+
+	// Extract native column attributes
+	nativeAttributes := map[string]string{
+		"http_method":           "http.method",
+		"http_status_code":      "http.status_code",
+		"db_system":             "db.system",
+		"db_statement":          "db.statement",
+		"messaging_system":      "messaging.system",
+		"messaging_destination": "messaging.destination",
+		"rpc_service":           "rpc.service",
+		"rpc_method":            "rpc.method",
+	}
+
+	for column, attrKey := range nativeAttributes {
+		if val := spanData[column]; val != nil {
+			var anyValue *common.AnyValue
+			switch v := val.(type) {
+			case string:
+				if v != "" {
+					anyValue = &common.AnyValue{
+						Value: &common.AnyValue_StringValue{StringValue: v},
+					}
+				}
+			case int64:
+				anyValue = &common.AnyValue{
+					Value: &common.AnyValue_IntValue{IntValue: v},
+				}
+			case int:
+				anyValue = &common.AnyValue{
+					Value: &common.AnyValue_IntValue{IntValue: int64(v)},
+				}
+			case float64:
+				anyValue = &common.AnyValue{
+					Value: &common.AnyValue_DoubleValue{DoubleValue: v},
+				}
+			}
+			if anyValue != nil {
+				span.Attributes = append(span.Attributes, &common.KeyValue{
+					Key:   attrKey,
+					Value: anyValue,
+				})
+			}
+		}
+	}
+
+	// TODO: Extract custom attributes from JSON attributes column if needed
+
+	return span
+}
+
+// buildTempoTraceSpan builds a Tempo span from Pinot row data
+func (s *Server) buildTempoTraceSpan(spanData map[string]interface{}) TempoTraceSpan {
+	span := TempoTraceSpan{
+		Attributes: []TempoAttribute{},
+	}
+
+	// Debug: log all keys in spanData
+	if s.debugQuery {
+		fmt.Printf("[DEBUG] spanData keys: ")
+		for k := range spanData {
+			fmt.Printf("%s, ", k)
+		}
+		fmt.Printf("\n")
+		fmt.Printf("[DEBUG] timestamp value type: %T, value: %v\n", spanData["timestamp"], spanData["timestamp"])
+		fmt.Printf("[DEBUG] duration value type: %T, value: %v\n", spanData["duration"], spanData["duration"])
+	}
+
+	// Extract core fields
+	if val, ok := spanData["trace_id"].(string); ok {
+		span.TraceID = val
+	}
+	if val, ok := spanData["span_id"].(string); ok {
+		span.SpanID = val
+	}
+	if val, ok := spanData["parent_span_id"].(string); ok && val != "" {
+		span.ParentSpanID = val
+	}
+	if val, ok := spanData["name"].(string); ok {
+		span.Name = val
+	}
+	if val, ok := spanData["kind"].(string); ok {
+		span.Kind = val
+	}
+
+	// Timestamp and duration
+	// Pinot can return numeric values as different types, so we need to handle multiple cases
+	if tsVal := spanData["timestamp"]; tsVal != nil {
+		var tsMillis int64
+		switch v := tsVal.(type) {
+		case int64:
+			tsMillis = v
+			if s.debugQuery {
+				fmt.Printf("[DEBUG] timestamp is int64: %d\n", tsMillis)
+			}
+		case int:
+			tsMillis = int64(v)
+			if s.debugQuery {
+				fmt.Printf("[DEBUG] timestamp is int: %d\n", tsMillis)
+			}
+		case float64:
+			tsMillis = int64(v)
+			if s.debugQuery {
+				fmt.Printf("[DEBUG] timestamp is float64: %f -> int64: %d\n", v, tsMillis)
+			}
+		case string:
+			if parsed, err := strconv.ParseInt(v, 10, 64); err == nil {
+				tsMillis = parsed
+				if s.debugQuery {
+					fmt.Printf("[DEBUG] timestamp is string: %s -> int64: %d\n", v, tsMillis)
+				}
+			}
+		default:
+			if s.debugQuery {
+				fmt.Printf("[DEBUG] Unknown timestamp type: %T, value: %v\n", v, v)
+			}
+		}
+		if tsMillis > 0 {
+			// Convert milliseconds to nanoseconds
+			nanos := tsMillis * 1000000
+			span.StartTimeUnixNano = fmt.Sprintf("%d", nanos)
+			if s.debugQuery {
+				fmt.Printf("[DEBUG] Set StartTimeUnixNano to: %s (from %d ms)\n", span.StartTimeUnixNano, tsMillis)
+			}
+		} else if s.debugQuery {
+			fmt.Printf("[DEBUG] timestamp value is 0 or negative: %d (original: %v)\n", tsMillis, tsVal)
+		}
+	} else if s.debugQuery {
+		fmt.Printf("[DEBUG] timestamp field is nil\n")
+	}
+
+	if durationVal := spanData["duration"]; durationVal != nil {
+		var durationNanos int64
+		switch v := durationVal.(type) {
+		case int64:
+			durationNanos = v
+			if s.debugQuery {
+				fmt.Printf("[DEBUG] duration is int64: %d\n", durationNanos)
+			}
+		case int:
+			durationNanos = int64(v)
+			if s.debugQuery {
+				fmt.Printf("[DEBUG] duration is int: %d\n", durationNanos)
+			}
+		case float64:
+			durationNanos = int64(v)
+			if s.debugQuery {
+				fmt.Printf("[DEBUG] duration is float64: %f -> int64: %d\n", v, durationNanos)
+			}
+		case string:
+			if parsed, err := strconv.ParseInt(v, 10, 64); err == nil {
+				durationNanos = parsed
+				if s.debugQuery {
+					fmt.Printf("[DEBUG] duration is string: %s -> int64: %d\n", v, durationNanos)
+				}
+			}
+		default:
+			if s.debugQuery {
+				fmt.Printf("[DEBUG] Unknown duration type: %T, value: %v\n", v, v)
+			}
+		}
+		if durationNanos > 0 {
+			span.DurationNanos = fmt.Sprintf("%d", durationNanos)
+			if s.debugQuery {
+				fmt.Printf("[DEBUG] Set DurationNanos to: %s\n", span.DurationNanos)
+			}
+		} else if s.debugQuery {
+			fmt.Printf("[DEBUG] duration value is 0 or negative: %d (original: %v)\n", durationNanos, durationVal)
+		}
+	} else if s.debugQuery {
+		fmt.Printf("[DEBUG] duration field is nil\n")
+	}
+
+	// Status
+	if statusCode, ok := spanData["status_code"].(string); ok && statusCode != "" {
+		span.Status.Code = statusCode
+	}
+	if statusMsg, ok := spanData["status_message"].(string); ok && statusMsg != "" {
+		span.Status.Message = statusMsg
+	}
+
+	// Add native column attributes
+	s.addNativeColumnAttributes(&span, spanData)
+
+	// Parse JSON attributes if present
+	if attrsJSON, ok := spanData["attributes"].(string); ok && attrsJSON != "" {
+		// TODO: Parse JSON attributes and add to span.Attributes
+		// For now, we'll just add a note that attributes exist
+	}
+
+	if s.debugQuery {
+		fmt.Printf("[DEBUG] Final span: TraceID=%s, SpanID=%s, StartTime=%s, Duration=%s\n",
+			span.TraceID, span.SpanID, span.StartTimeUnixNano, span.DurationNanos)
+	}
+
+	return span
+}
+
+// addNativeColumnAttributes adds attributes from native Pinot columns
+func (s *Server) addNativeColumnAttributes(span *TempoTraceSpan, spanData map[string]interface{}) {
+	// HTTP attributes
+	if val, ok := spanData["http_method"].(string); ok && val != "" {
+		span.Attributes = append(span.Attributes, TempoAttribute{
+			Key:   "http.method",
+			Value: stringValue(val),
+		})
+	}
+	if val, ok := spanData["http_status_code"].(int); ok && val > 0 {
+		span.Attributes = append(span.Attributes, TempoAttribute{
+			Key:   "http.status_code",
+			Value: intValueFromInt(val),
+		})
+	}
+	if val, ok := spanData["http_route"].(string); ok && val != "" {
+		span.Attributes = append(span.Attributes, TempoAttribute{
+			Key:   "http.route",
+			Value: stringValue(val),
+		})
+	}
+	if val, ok := spanData["http_target"].(string); ok && val != "" {
+		span.Attributes = append(span.Attributes, TempoAttribute{
+			Key:   "http.target",
+			Value: stringValue(val),
+		})
+	}
+
+	// DB attributes
+	if val, ok := spanData["db_system"].(string); ok && val != "" {
+		span.Attributes = append(span.Attributes, TempoAttribute{
+			Key:   "db.system",
+			Value: stringValue(val),
+		})
+	}
+	if val, ok := spanData["db_statement"].(string); ok && val != "" {
+		span.Attributes = append(span.Attributes, TempoAttribute{
+			Key:   "db.statement",
+			Value: stringValue(val),
+		})
+	}
+
+	// Messaging attributes
+	if val, ok := spanData["messaging_system"].(string); ok && val != "" {
+		span.Attributes = append(span.Attributes, TempoAttribute{
+			Key:   "messaging.system",
+			Value: stringValue(val),
+		})
+	}
+	if val, ok := spanData["messaging_destination"].(string); ok && val != "" {
+		span.Attributes = append(span.Attributes, TempoAttribute{
+			Key:   "messaging.destination",
+			Value: stringValue(val),
+		})
+	}
+
+	// RPC attributes
+	if val, ok := spanData["rpc_service"].(string); ok && val != "" {
+		span.Attributes = append(span.Attributes, TempoAttribute{
+			Key:   "rpc.service",
+			Value: stringValue(val),
+		})
+	}
+	if val, ok := spanData["rpc_method"].(string); ok && val != "" {
+		span.Attributes = append(span.Attributes, TempoAttribute{
+			Key:   "rpc.method",
+			Value: stringValue(val),
+		})
+	}
+
+	// Error flag
+	if val, ok := spanData["error"].(bool); ok {
+		span.Attributes = append(span.Attributes, TempoAttribute{
+			Key:   "error",
+			Value: boolValue(val),
+		})
+	}
 }

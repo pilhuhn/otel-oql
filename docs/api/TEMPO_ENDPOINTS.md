@@ -7,6 +7,7 @@ This document describes the Grafana Tempo-compatible API endpoints implemented f
 OTEL-OQL now provides Tempo API v2 endpoints that enable:
 - **Grafana autocomplete**: Tag/label discovery for TraceQL query builder
 - **Search functionality**: Execute TraceQL queries and return matching traces
+- **Trace retrieval**: Fetch detailed trace data by trace ID
 - **Native performance**: 10-100x faster queries using indexed columns
 
 ## Available Endpoints
@@ -251,6 +252,162 @@ curl 'http://localhost:8080/api/v2/search/tag/span.db.system/values' \
 
 ---
 
+### 6. `/api/traces/{traceID}` and `/api/v2/traces/{traceID}` - Get Trace by ID
+
+Returns detailed trace data for a specific trace ID, including all spans in the trace.
+
+**Content Negotiation**: Both endpoints support dual format based on the `Accept` header:
+- **Protobuf**: `Accept: application/protobuf` - Returns OTLP binary protobuf (used by Grafana)
+- **JSON**: No Accept header or `Accept: application/json` - Returns JSON (used by Perses, curl, etc.)
+
+**Request**:
+```bash
+# v1 endpoint (returns batches format)
+GET /api/traces/{traceID}
+
+# v2 endpoint (returns resourceSpans format)
+GET /api/v2/traces/{traceID}
+```
+
+**Parameters**:
+- `{traceID}`: Trace ID (e.g., `d246e356447cd0508dc66c42103ec0ed`)
+- **Header** `Accept`: Optional - `application/protobuf` for binary protobuf, `application/json` or omitted for JSON
+
+**Response for v1** (`/api/traces/{traceID}` - Tempo format):
+```json
+{
+  "batches": [
+    {
+      "resource": {
+        "attributes": [
+          {
+            "key": "service.name",
+            "value": {
+              "stringValue": "api"
+            }
+          }
+        ]
+      },
+      "scopeSpans": [
+        {
+          "scope": {},
+          "spans": [...]
+        }
+      ]
+    }
+  ]
+}
+```
+
+**Response for v2** (`/api/v2/traces/{traceID}` - OTLP format):
+```json
+{
+  "resourceSpans": [
+    {
+      "resource": {
+        "attributes": [
+          {
+            "key": "service.name",
+            "value": {
+              "stringValue": "api"
+            }
+          }
+        ]
+      },
+      "scopeSpans": [
+        {
+          "scope": {},
+          "spans": [
+            {
+              "traceID": "b06e5ee8f5b5a34c87808e09834cbff3",
+              "spanID": "abc123",
+              "parentSpanID": "",
+              "name": "HTTP GET /checkout",
+              "startTimeUnixNano": "1774832350000000000",
+              "durationNanos": "125000000",
+              "attributes": [
+                {
+                  "key": "http.method",
+                  "value": {
+                    "stringValue": "GET"
+                  }
+                },
+                {
+                  "key": "http.status_code",
+                  "value": {
+                    "intValue": "200"
+                  }
+                }
+              ],
+              "status": {
+                "code": "STATUS_CODE_OK"
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
+```
+
+**Examples**:
+```bash
+# Get trace by ID (v1 endpoint - JSON format)
+curl 'http://localhost:8080/api/traces/d246e356447cd0508dc66c42103ec0ed' \
+  -H 'X-Tenant-ID: 0'
+# Returns: {"batches": [...]} (JSON)
+
+# Get trace by ID (v2 endpoint - JSON format)
+curl 'http://localhost:8080/api/v2/traces/d246e356447cd0508dc66c42103ec0ed' \
+  -H 'X-Tenant-ID: 0'
+# Returns: {"resourceSpans": [...]} (JSON)
+
+# Get trace by ID (protobuf format - for Grafana)
+curl 'http://localhost:8080/api/v2/traces/d246e356447cd0508dc66c42103ec0ed' \
+  -H 'X-Tenant-ID: 0' \
+  -H 'Accept: application/protobuf'
+# Returns: OTLP binary protobuf (Content-Type: application/protobuf)
+```
+
+**Response Format Differences**:
+
+Both endpoints return OTLP-compatible JSON with attribute values wrapped in type-specific objects:
+- String values: `{"stringValue": "..."}`
+- Integer values: `{"intValue": 123}`
+- Boolean values: `{"boolValue": true}`
+- Double values: `{"doubleValue": 1.23}`
+
+Both use the same nested structure, just with different top-level field names:
+
+**v1** (`/api/traces/{id}`):
+- Top-level field: `batches` (Tempo v1 format)
+- Each batch contains: `resource`, `scopeSpans[]`
+- Each scopeSpan contains: `scope`, `spans`
+
+**v2** (`/api/v2/traces/{id}`):
+- Top-level field: `resourceSpans` (OTLP format)
+- Each resourceSpan contains: `resource`, `scopeSpans[]`
+- Each scopeSpan contains: `scope`, `spans`
+
+The internal structure is identical - only the top-level wrapper differs.
+
+**Native Column Attributes**:
+
+The endpoint automatically includes attributes from native indexed columns:
+- `http.method` → `http_method` column (stringValue)
+- `http.status_code` → `http_status_code` column (intValue)
+- `db.system` → `db_system` column (stringValue)
+- `db.statement` → `db_statement` column (stringValue)
+- `messaging.system` → `messaging_system` column (stringValue)
+- `messaging.destination` → `messaging_destination` column (stringValue)
+- `rpc.service` → `rpc_service` column (stringValue)
+- `rpc.method` → `rpc_method` column (stringValue)
+
+Custom attributes stored in the JSON `attributes` column are also included.
+
+---
+
 ## Performance Optimizations
 
 ### Native Column Mapping
@@ -300,6 +457,8 @@ DEBUG_QUERY=true DEBUG_TRANSLATION=true ./otel-oql
 
 ## Grafana Integration
 
+**Status**: ✅ Search works | ⚠️ Trace detail has issues
+
 To use these endpoints in Grafana:
 
 1. **Add Tempo Data Source**:
@@ -309,14 +468,38 @@ To use these endpoints in Grafana:
 
 2. **Test Connection**:
    - Grafana will call `/api/v2/search/tags` to verify connectivity
+   - ✅ **Working**
 
 3. **Query Builder**:
    - Grafana will use `/api/v2/search/tag/{tag}/values` for autocomplete
    - Clicking a tag shows its available values
+   - ✅ **Working**
 
 4. **Search**:
    - Grafana sends TraceQL queries to `/api/v2/search`
-   - Results displayed as trace list
+   - Results displayed as trace list with correct timestamps and durations
+   - ✅ **Working**
+
+5. **Trace Detail**:
+   - Clicking a trace fetches `/api/v2/traces/{traceID}` with `Accept: application/protobuf`
+   - ⚠️ **Currently fails with "unexpected EOF"** - Grafana expects Tempo's proprietary protobuf format
+   - **Workaround**: Use Perses or Jaeger UI for trace visualization
+
+## Perses Integration
+
+**Status**: ✅ Fully working
+
+Perses (https://perses.dev/) works perfectly with the JSON API:
+
+1. **Configure Tempo Datasource**:
+   - URL: `http://localhost:8080`
+   - Headers: `X-Tenant-ID: 0`
+
+2. **All features working**:
+   - ✅ Search traces
+   - ✅ View trace details (waterfall)
+   - ✅ Correct timestamps and durations
+   - ✅ Span attributes display properly
 
 ---
 
@@ -346,15 +529,125 @@ go test ./pkg/api -run TestTempo -v
 - Tag-to-column mapping: 11 tests
 - SQL generation: 3 tests
 - TraceQL query execution: 3 tests
-- **Total**: 17 tests, all passing
+- V1 metadata: 1 test
+- Trace by ID: 1 test
+- Echo endpoint: 1 test
+- **Total**: 20 tests, all passing
 
 ---
 
 ## Implementation Files
 
-- `pkg/api/tempo.go` - Tempo API handlers (~400 lines)
-- `pkg/api/tempo_test.go` - Tempo endpoint tests (17 tests)
+- `pkg/api/tempo.go` - Tempo API handlers (~1200+ lines)
+- `pkg/api/tempo_test.go` - Tempo endpoint tests (20 tests)
 - `pkg/api/server.go` - Endpoint registration
+
+---
+
+## Content Negotiation (JSON vs Protobuf)
+
+The trace detail endpoints (`/api/traces/{id}` and `/api/v2/traces/{id}`) support **dual-format responses** based on the `Accept` header:
+
+⚠️ **Known Limitation**: Grafana's Tempo datasource currently encounters "unexpected EOF" errors with our OTLP protobuf format. Grafana likely expects Tempo's proprietary protobuf format (AGPL-licensed), which we cannot implement directly. **Use Perses or Jaeger UI for trace visualization**, or stick with JSON-based tools.
+
+### Protobuf Format (Grafana)
+
+**When**: Client sends `Accept: application/protobuf` header
+
+**Response**: OTLP binary protobuf (`Content-Type: application/protobuf`)
+
+**Structure**: OpenTelemetry Protocol (OTLP) TracesData protobuf message
+- TraceID and SpanID as bytes (hex-decoded)
+- Timestamps as uint64 nanoseconds
+- Attributes as KeyValue with AnyValue protobuf messages
+
+**Example**:
+```bash
+curl 'http://localhost:8080/api/v2/traces/{traceID}' \
+  -H 'Accept: application/protobuf' \
+  -H 'X-Tenant-ID: 0'
+# Returns: binary protobuf data
+```
+
+**Used by**: Grafana Tempo datasource
+
+### JSON Format (Perses, curl, browsers)
+
+**When**: No Accept header or `Accept: application/json`
+
+**Response**: OTLP-compatible JSON (`Content-Type: application/json`)
+
+**Structure**: Same as protobuf but serialized as JSON
+- TraceID and SpanID as hex strings
+- Timestamps as string nanoseconds (v1) or uint64 (v2)
+- Attributes with type wrappers (stringValue, intValue, etc.)
+
+**Example**:
+```bash
+curl 'http://localhost:8080/api/v2/traces/{traceID}' \
+  -H 'X-Tenant-ID: 0'
+# Returns: {"resourceSpans": [...]}
+```
+
+**Used by**: Perses, curl, web browsers, custom clients
+
+### Implementation
+
+The server detects the `Accept` header and routes accordingly:
+
+```go
+acceptHeader := r.Header.Get("Accept")
+if strings.Contains(acceptHeader, "application/protobuf") {
+    // Return OTLP protobuf binary
+    tracesData := s.transformToOTLPProtobuf(results[0])
+    data, _ := proto.Marshal(tracesData)
+    w.Header().Set("Content-Type", "application/protobuf")
+    w.Write(data)
+} else {
+    // Return JSON
+    trace := s.transformToTempoTraceV2(results[0])
+    writeJSON(w, http.StatusOK, trace)
+}
+```
+
+This allows the same endpoint to serve both Grafana (protobuf) and Perses (JSON) clients.
+
+---
+
+## Pinot Type Handling
+
+**Important**: Pinot returns numeric columns as `float64` values in Go, even for columns defined as `BIGINT` or `INT`.
+
+This affects timestamp and duration extraction in all Tempo endpoints. The implementation uses comprehensive type handling:
+
+```go
+var tsMillis int64
+if tsVal := span["timestamp"]; tsVal != nil {
+    switch v := tsVal.(type) {
+    case int64:
+        tsMillis = v
+    case int:
+        tsMillis = int64(v)
+    case float64:
+        tsMillis = int64(v)  // Pinot returns float64!
+    case string:
+        if parsed, err := strconv.ParseInt(v, 10, 64); err == nil {
+            tsMillis = parsed
+        }
+    }
+}
+```
+
+**Why This Matters**:
+- Naive `span["timestamp"].(int64)` type assertions fail with Pinot data
+- Results in zero timestamps ("epoch" in UIs)
+- Must handle all numeric types for robust extraction
+
+**Affected Endpoints**:
+- `/api/search` - Search results timestamps and durations
+- `/api/v2/search` - Search results timestamps and durations
+- `/api/traces/{id}` - Span timestamps and durations
+- `/api/v2/traces/{id}` - Span timestamps and durations
 
 ---
 
@@ -363,5 +656,6 @@ go test ./pkg/api -run TestTempo -v
 Potential enhancements:
 - Apply filter query `q={}` in tag values endpoint
 - Return more trace metadata in search results
-- Add trace detail endpoint `/api/v2/traces/{traceID}`
 - Add span sets in search response
+- Add trace comparison endpoint
+- Implement trace streaming for large traces

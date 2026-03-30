@@ -67,6 +67,8 @@ func (s *Server) Start(ctx context.Context) error {
 	mux.Handle("/api/v2/search", s.validator.HTTPMiddleware(http.HandlerFunc(s.handleTempoSearch)))
 	mux.Handle("/api/v2/search/tags", s.validator.HTTPMiddleware(http.HandlerFunc(s.handleTempoSearchTags)))
 	mux.HandleFunc("/api/v2/search/tag/", s.validator.HTTPMiddleware(http.HandlerFunc(s.handleTempoSearchTagValues)).ServeHTTP)
+	mux.HandleFunc("/api/traces/", s.validator.HTTPMiddleware(http.HandlerFunc(s.handleTempoTraceByID)).ServeHTTP) // v1 trace endpoint
+	mux.HandleFunc("/api/v2/traces/", s.validator.HTTPMiddleware(http.HandlerFunc(s.handleTempoTraceByID)).ServeHTTP) // v2 trace endpoint
 
 	s.httpServer = &http.Server{
 		Addr:    fmt.Sprintf(":%d", s.port),

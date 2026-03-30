@@ -256,3 +256,51 @@ func TestTempoV1MetadataQuery(t *testing.T) {
 		}
 	})
 }
+
+func TestTempoTraceByID(t *testing.T) {
+	t.Run("trace response structure", func(t *testing.T) {
+		// Test that the trace structure is correct
+		methodVal := "GET"
+		statusCode := int64(200)
+		span := TempoTraceSpan{
+			TraceID:           "b06e5ee8f5b5a34c87808e09834cbff3",
+			SpanID:            "abc123",
+			Name:              "HTTP GET",
+			StartTimeUnixNano: "1774832350000000000",
+			DurationNanos:     "125000000",
+			Attributes: []TempoAttribute{
+				{Key: "http.method", Value: TempoAnyValue{StringValue: &methodVal}},
+				{Key: "http.status_code", Value: TempoAnyValue{IntValue: &statusCode}},
+			},
+			Status: TempoStatus{Code: "STATUS_CODE_OK"},
+		}
+
+		scopeSpans := TempoScopeSpans{
+			Spans: []TempoTraceSpan{span},
+		}
+
+		resourceSpans := TempoResourceSpans{
+			ScopeSpans: []TempoScopeSpans{scopeSpans},
+		}
+
+		trace := TempoTraceResponse{
+			ResourceSpans: []TempoResourceSpans{resourceSpans},
+		}
+
+		if len(trace.ResourceSpans) != 1 {
+			t.Errorf("Expected 1 resourceSpans, got %d", len(trace.ResourceSpans))
+		}
+
+		if len(trace.ResourceSpans[0].ScopeSpans) != 1 {
+			t.Errorf("Expected 1 scopeSpans, got %d", len(trace.ResourceSpans[0].ScopeSpans))
+		}
+
+		if len(trace.ResourceSpans[0].ScopeSpans[0].Spans) != 1 {
+			t.Errorf("Expected 1 span, got %d", len(trace.ResourceSpans[0].ScopeSpans[0].Spans))
+		}
+
+		if trace.ResourceSpans[0].ScopeSpans[0].Spans[0].TraceID != "b06e5ee8f5b5a34c87808e09834cbff3" {
+			t.Errorf("Expected trace ID b06e5ee8f5b5a34c87808e09834cbff3, got %s", trace.ResourceSpans[0].ScopeSpans[0].Spans[0].TraceID)
+		}
+	})
+}
