@@ -1382,16 +1382,6 @@ func (s *Server) buildTempoTraceSpan(spanData map[string]interface{}) TempoTrace
 		Attributes: []TempoAttribute{},
 	}
 
-	// Debug: log all keys in spanData
-	if s.debugQuery {
-		fmt.Printf("[DEBUG] spanData keys: ")
-		for k := range spanData {
-			fmt.Printf("%s, ", k)
-		}
-		fmt.Printf("\n")
-		fmt.Printf("[DEBUG] timestamp value type: %T, value: %v\n", spanData["timestamp"], spanData["timestamp"])
-		fmt.Printf("[DEBUG] duration value type: %T, value: %v\n", spanData["duration"], spanData["duration"])
-	}
 
 	// Extract core fields
 	if val, ok := spanData["trace_id"].(string); ok {
@@ -1417,43 +1407,20 @@ func (s *Server) buildTempoTraceSpan(spanData map[string]interface{}) TempoTrace
 		switch v := tsVal.(type) {
 		case int64:
 			tsMillis = v
-			if s.debugQuery {
-				fmt.Printf("[DEBUG] timestamp is int64: %d\n", tsMillis)
-			}
 		case int:
 			tsMillis = int64(v)
-			if s.debugQuery {
-				fmt.Printf("[DEBUG] timestamp is int: %d\n", tsMillis)
-			}
 		case float64:
 			tsMillis = int64(v)
-			if s.debugQuery {
-				fmt.Printf("[DEBUG] timestamp is float64: %f -> int64: %d\n", v, tsMillis)
-			}
 		case string:
 			if parsed, err := strconv.ParseInt(v, 10, 64); err == nil {
 				tsMillis = parsed
-				if s.debugQuery {
-					fmt.Printf("[DEBUG] timestamp is string: %s -> int64: %d\n", v, tsMillis)
-				}
-			}
-		default:
-			if s.debugQuery {
-				fmt.Printf("[DEBUG] Unknown timestamp type: %T, value: %v\n", v, v)
 			}
 		}
 		if tsMillis > 0 {
 			// Convert milliseconds to nanoseconds
 			nanos := tsMillis * 1000000
 			span.StartTimeUnixNano = fmt.Sprintf("%d", nanos)
-			if s.debugQuery {
-				fmt.Printf("[DEBUG] Set StartTimeUnixNano to: %s (from %d ms)\n", span.StartTimeUnixNano, tsMillis)
-			}
-		} else if s.debugQuery {
-			fmt.Printf("[DEBUG] timestamp value is 0 or negative: %d (original: %v)\n", tsMillis, tsVal)
 		}
-	} else if s.debugQuery {
-		fmt.Printf("[DEBUG] timestamp field is nil\n")
 	}
 
 	if durationVal := spanData["duration"]; durationVal != nil {
@@ -1461,41 +1428,18 @@ func (s *Server) buildTempoTraceSpan(spanData map[string]interface{}) TempoTrace
 		switch v := durationVal.(type) {
 		case int64:
 			durationNanos = v
-			if s.debugQuery {
-				fmt.Printf("[DEBUG] duration is int64: %d\n", durationNanos)
-			}
 		case int:
 			durationNanos = int64(v)
-			if s.debugQuery {
-				fmt.Printf("[DEBUG] duration is int: %d\n", durationNanos)
-			}
 		case float64:
 			durationNanos = int64(v)
-			if s.debugQuery {
-				fmt.Printf("[DEBUG] duration is float64: %f -> int64: %d\n", v, durationNanos)
-			}
 		case string:
 			if parsed, err := strconv.ParseInt(v, 10, 64); err == nil {
 				durationNanos = parsed
-				if s.debugQuery {
-					fmt.Printf("[DEBUG] duration is string: %s -> int64: %d\n", v, durationNanos)
-				}
-			}
-		default:
-			if s.debugQuery {
-				fmt.Printf("[DEBUG] Unknown duration type: %T, value: %v\n", v, v)
 			}
 		}
 		if durationNanos > 0 {
 			span.DurationNanos = fmt.Sprintf("%d", durationNanos)
-			if s.debugQuery {
-				fmt.Printf("[DEBUG] Set DurationNanos to: %s\n", span.DurationNanos)
-			}
-		} else if s.debugQuery {
-			fmt.Printf("[DEBUG] duration value is 0 or negative: %d (original: %v)\n", durationNanos, durationVal)
 		}
-	} else if s.debugQuery {
-		fmt.Printf("[DEBUG] duration field is nil\n")
 	}
 
 	// Status
@@ -1513,11 +1457,6 @@ func (s *Server) buildTempoTraceSpan(spanData map[string]interface{}) TempoTrace
 	if attrsJSON, ok := spanData["attributes"].(string); ok && attrsJSON != "" {
 		// TODO: Parse JSON attributes and add to span.Attributes
 		// For now, we'll just add a note that attributes exist
-	}
-
-	if s.debugQuery {
-		fmt.Printf("[DEBUG] Final span: TraceID=%s, SpanID=%s, StartTime=%s, Duration=%s\n",
-			span.TraceID, span.SpanID, span.StartTimeUnixNano, span.DurationNanos)
 	}
 
 	return span
