@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -473,6 +474,297 @@ func (s *Server) transformToTempoTraces(results []QueryResult) []TempoTrace {
 			RootServiceName:   rootServiceName,
 			RootTraceName:     rootTraceName,
 			StartTimeUnixNano: minStartTime * 1000000, // Convert millis to nanos
+			DurationMs:        durationMs,
+		})
+	}
+
+	return traces
+}
+
+// TempoV1SearchResponse represents the response for /api/search (v1 API)
+type TempoV1SearchResponse struct {
+	Traces   []TempoV1Trace `json:"traces"`
+	Metadata TempoMetadata  `json:"metadata,omitempty"`
+}
+
+// TempoV1Trace represents a trace in v1 search results
+type TempoV1Trace struct {
+	TraceID           string `json:"traceID"`
+	RootServiceName   string `json:"rootServiceName"`
+	RootTraceName     string `json:"rootTraceName"`
+	StartTimeUnixNano string `json:"startTimeUnixNano"` // v1 uses string
+	DurationMs        int    `json:"durationMs"`
+}
+
+// TempoMetadata contains metadata about available values
+type TempoMetadata struct {
+	ServiceNames   []string `json:"serviceNames,omitempty"`
+	OperationNames []string `json:"operationNames,omitempty"`
+}
+
+// handleTempoV1Search handles GET /api/search (Tempo v1 API)
+// Used by Grafana to get trace metadata and search results
+func (s *Server) handleTempoV1Search(w http.ResponseWriter, r *http.Request) {
+	start := time.Now()
+	ctx, span := s.obs.Tracer().Start(r.Context(), "api.tempo.v1.search")
+	defer span.End()
+
+	// Get tenant ID from context
+	tenantID, ok := tenant.FromContext(r.Context())
+	if !ok {
+		s.obs.RecordError(ctx, "missing_tenant_id", "tempo_api")
+		s.obs.RecordRequest(ctx, "/api/search", time.Since(start), http.StatusUnauthorized)
+		http.Error(w, "tenant-id not found", http.StatusUnauthorized)
+		return
+	}
+
+	// Parse query parameters
+	query := r.URL.Query()
+	q := query.Get("q") // TraceQL query (often just "{}")
+	limitStr := query.Get("limit")
+	
+	limit := 20 // Default limit
+	if limitStr != "" {
+		if l, err := strconv.Atoi(limitStr); err == nil && l > 0 {
+			limit = l
+		}
+	}
+
+	// Parse time range
+	var startTime, endTime *time.Time
+	if startStr := query.Get("start"); startStr != "" {
+		if ts, err := strconv.ParseInt(startStr, 10, 64); err == nil {
+			t := time.Unix(ts, 0)
+			startTime = &t
+		}
+	}
+	if endStr := query.Get("end"); endStr != "" {
+		if ts, err := strconv.ParseInt(endStr, 10, 64); err == nil {
+			t := time.Unix(ts, 0)
+			endTime = &t
+		}
+	}
+
+	if s.debugQuery {
+		fmt.Printf("[DEBUG QUERY] Tempo v1 search (tenant_id=%d, q=%s, limit=%d, start=%v, end=%v)\n",
+			tenantID, q, limit, startTime, endTime)
+	}
+
+	// If query is empty or just "{}", return metadata with service names
+	if q == "" || q == "{}" {
+		metadata, err := s.getTempoMetadata(ctx, tenantID, startTime, endTime)
+		if err != nil {
+			s.obs.RecordError(ctx, "metadata_error", "tempo_api")
+			s.obs.RecordRequest(ctx, "/api/search", time.Since(start), http.StatusInternalServerError)
+			http.Error(w, fmt.Sprintf("failed to get metadata: %v", err), http.StatusInternalServerError)
+			return
+		}
+
+		response := TempoV1SearchResponse{
+			Traces:   []TempoV1Trace{}, // Empty traces list
+			Metadata: *metadata,
+		}
+
+		s.obs.RecordRequest(ctx, "/api/search", time.Since(start), http.StatusOK)
+		writeJSON(w, http.StatusOK, response)
+		return
+	}
+
+	// Execute TraceQL query
+	translator := traceql.NewTranslator(tenantID)
+	var sqlQueries []string
+	var err error
+
+	if startTime != nil && endTime != nil {
+		sqlQueries, err = translator.TranslateQueryWithTimeRange(q, startTime, endTime)
+	} else {
+		sqlQueries, err = translator.TranslateQuery(q)
+	}
+
+	if err != nil {
+		if s.debugQuery {
+			fmt.Printf("[DEBUG QUERY] TraceQL translation failed: %v\n", err)
+		}
+		s.obs.RecordError(ctx, "translation_error", "tempo_api")
+		s.obs.RecordRequest(ctx, "/api/search", time.Since(start), http.StatusBadRequest)
+		http.Error(w, fmt.Sprintf("TraceQL parse error: %v", err), http.StatusBadRequest)
+		return
+	}
+
+	if s.debugTranslation {
+		fmt.Printf("[DEBUG TRANSLATION] Tempo v1 search query translated to %d SQL statements:\n", len(sqlQueries))
+		for i, sql := range sqlQueries {
+			fmt.Printf("[DEBUG TRANSLATION]   [%d] %s\n", i+1, sql)
+		}
+	}
+
+	// Add LIMIT to SQL
+	if len(sqlQueries) > 0 {
+		sqlQueries[0] = sqlQueries[0] + fmt.Sprintf(" LIMIT %d", limit)
+	}
+
+	// Execute queries against Pinot
+	results, err := s.executeQueries(ctx, sqlQueries)
+	if err != nil {
+		s.obs.RecordError(ctx, "execution_error", "tempo_api")
+		s.obs.RecordRequest(ctx, "/api/search", time.Since(start), http.StatusInternalServerError)
+		http.Error(w, fmt.Sprintf("query execution failed: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	// Transform results to v1 format
+	traces := s.transformToTempoV1Traces(results)
+
+	response := TempoV1SearchResponse{
+		Traces: traces,
+	}
+
+	s.obs.RecordRequest(ctx, "/api/search", time.Since(start), http.StatusOK)
+	writeJSON(w, http.StatusOK, response)
+}
+
+// getTempoMetadata returns metadata about available service names and operation names
+func (s *Server) getTempoMetadata(ctx context.Context, tenantID int, start, end *time.Time) (*TempoMetadata, error) {
+	// Build SQL to get distinct service names
+	serviceNamesSQL := fmt.Sprintf("SELECT DISTINCT service_name FROM otel_spans WHERE tenant_id = %d AND service_name IS NOT NULL", tenantID)
+	
+	if start != nil && end != nil {
+		startMillis := start.UnixMilli()
+		endMillis := end.UnixMilli()
+		serviceNamesSQL += fmt.Sprintf(" AND \"timestamp\" >= %d AND \"timestamp\" <= %d", startMillis, endMillis)
+	}
+	
+	serviceNamesSQL += " LIMIT 100"
+
+	// Build SQL to get distinct operation names (span names)
+	operationNamesSQL := fmt.Sprintf("SELECT DISTINCT name FROM otel_spans WHERE tenant_id = %d AND name IS NOT NULL", tenantID)
+	
+	if start != nil && end != nil {
+		startMillis := start.UnixMilli()
+		endMillis := end.UnixMilli()
+		operationNamesSQL += fmt.Sprintf(" AND \"timestamp\" >= %d AND \"timestamp\" <= %d", startMillis, endMillis)
+	}
+	
+	operationNamesSQL += " LIMIT 100"
+
+	// Execute both queries
+	results, err := s.executeQueries(ctx, []string{serviceNamesSQL, operationNamesSQL})
+	if err != nil {
+		return nil, err
+	}
+
+	metadata := &TempoMetadata{
+		ServiceNames:   []string{},
+		OperationNames: []string{},
+	}
+
+	// Extract service names from first result
+	if len(results) > 0 && len(results[0].Rows) > 0 {
+		for _, row := range results[0].Rows {
+			if len(row) > 0 {
+				if val, ok := row[0].(string); ok && val != "" {
+					metadata.ServiceNames = append(metadata.ServiceNames, val)
+				}
+			}
+		}
+	}
+
+	// Extract operation names from second result
+	if len(results) > 1 && len(results[1].Rows) > 0 {
+		for _, row := range results[1].Rows {
+			if len(row) > 0 {
+				if val, ok := row[0].(string); ok && val != "" {
+					metadata.OperationNames = append(metadata.OperationNames, val)
+				}
+			}
+		}
+	}
+
+	return metadata, nil
+}
+
+// transformToTempoV1Traces transforms Pinot results to Tempo v1 trace format
+func (s *Server) transformToTempoV1Traces(results []QueryResult) []TempoV1Trace {
+	// Group spans by trace_id (reuse logic from v2)
+	traceMap := make(map[string][]map[string]interface{})
+
+	for _, result := range results {
+		for _, row := range result.Rows {
+			if len(row) < len(result.Columns) {
+				continue
+			}
+
+			// Create span map
+			spanData := make(map[string]interface{})
+			for i, col := range result.Columns {
+				spanData[col] = row[i]
+			}
+
+			// Extract trace_id
+			traceID := ""
+			if tid, ok := spanData["trace_id"].(string); ok {
+				traceID = tid
+			}
+
+			if traceID != "" {
+				traceMap[traceID] = append(traceMap[traceID], spanData)
+			}
+		}
+	}
+
+	// Convert to Tempo v1 trace format
+	traces := []TempoV1Trace{}
+	for traceID, spans := range traceMap {
+		if len(spans) == 0 {
+			continue
+		}
+
+		// Find root span and calculate trace duration
+		var rootServiceName, rootTraceName string
+		var minStartTime int64 = 0
+		var maxEndTime int64 = 0
+
+		for _, span := range spans {
+			// Extract span name for root
+			if name, ok := span["name"].(string); ok && rootTraceName == "" {
+				rootTraceName = name
+			}
+
+			// Extract service name for root
+			if service, ok := span["service_name"].(string); ok && rootServiceName == "" {
+				rootServiceName = service
+			}
+
+			// Calculate trace time bounds
+			if ts, ok := span["timestamp"].(int64); ok {
+				if minStartTime == 0 || ts < minStartTime {
+					minStartTime = ts
+				}
+			}
+
+			if duration, ok := span["duration"].(int64); ok {
+				if ts, ok := span["timestamp"].(int64); ok {
+					endTime := ts + (duration / 1000000) // Convert nanos to millis
+					if endTime > maxEndTime {
+						maxEndTime = endTime
+					}
+				}
+			}
+		}
+
+		durationMs := 0
+		if maxEndTime > minStartTime {
+			durationMs = int(maxEndTime - minStartTime)
+		}
+
+		// v1 uses string for startTimeUnixNano
+		startTimeNano := minStartTime * 1000000 // Convert millis to nanos
+
+		traces = append(traces, TempoV1Trace{
+			TraceID:           traceID,
+			RootServiceName:   rootServiceName,
+			RootTraceName:     rootTraceName,
+			StartTimeUnixNano: fmt.Sprintf("%d", startTimeNano),
 			DurationMs:        durationMs,
 		})
 	}

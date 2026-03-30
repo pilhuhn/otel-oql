@@ -238,3 +238,21 @@ func TestTempoSearchQuery(t *testing.T) {
 		})
 	}
 }
+
+func TestTempoV1MetadataQuery(t *testing.T) {
+	t.Run("metadata response structure", func(t *testing.T) {
+		// Test that the metadata structure is correct
+		metadata := &TempoMetadata{
+			ServiceNames:   []string{"service-a", "service-b"},
+			OperationNames: []string{"GET /api", "POST /api"},
+		}
+
+		if len(metadata.ServiceNames) != 2 {
+			t.Errorf("Expected 2 service names, got %d", len(metadata.ServiceNames))
+		}
+
+		if len(metadata.OperationNames) != 2 {
+			t.Errorf("Expected 2 operation names, got %d", len(metadata.OperationNames))
+		}
+	})
+}

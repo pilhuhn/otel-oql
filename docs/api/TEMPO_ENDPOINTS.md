@@ -36,9 +36,69 @@ curl 'http://localhost:8080/api/echo'
 
 ---
 
-### 2. `/api/v2/search` - Execute TraceQL Queries
+### 2. `/api/search` - Tempo v1 Search & Metadata
 
-Main search endpoint for executing TraceQL queries.
+Tempo v1 search endpoint used by Grafana to get trace metadata (service names, operation names) and search results.
+
+**Request**:
+```bash
+GET /api/search?q={}&limit=20&start=1774833777&end=1774855377
+```
+
+**Parameters**:
+- `q` (optional): TraceQL query string (e.g., `{duration > 100ms}`, or `{}` for metadata)
+- `limit` (optional): Maximum number of traces to return (default: 20)
+- `start` (optional): Unix timestamp (seconds) for time range start
+- `end` (optional): Unix timestamp (seconds) for time range end
+
+**Response when `q={}` (metadata request)**:
+```json
+{
+  "traces": [],
+  "metadata": {
+    "serviceNames": ["api", "checkout", "payment"],
+    "operationNames": ["HTTP GET", "HTTP POST", "checkout_process"]
+  }
+}
+```
+
+**Response when executing a query**:
+```json
+{
+  "traces": [
+    {
+      "traceID": "abc123...",
+      "rootServiceName": "api",
+      "rootTraceName": "HTTP GET",
+      "startTimeUnixNano": "1774832350000000000",
+      "durationMs": 125
+    }
+  ]
+}
+```
+
+**Examples**:
+```bash
+# Get metadata (service names and operation names)
+curl 'http://localhost:8080/api/search?q=%7B%7D&start=1774833777&end=1774855377' \
+  -H 'X-Tenant-ID: 0'
+
+# Search for slow traces
+curl 'http://localhost:8080/api/search?q={duration > 1s}&limit=20' \
+  -H 'X-Tenant-ID: 0'
+
+# Search for HTTP 500 errors
+curl 'http://localhost:8080/api/search?q={span.http.status_code = 500}' \
+  -H 'X-Tenant-ID: 0'
+```
+
+**Note**: This is the **v1 API** endpoint. Grafana uses this for the search UI and to populate service/operation dropdowns. For v2 API, use `/api/v2/search`.
+
+---
+
+### 3. `/api/v2/search` - Execute TraceQL Queries
+
+Main search endpoint for executing TraceQL queries (v2 API).
 
 **Request**:
 ```bash
@@ -82,7 +142,7 @@ curl 'http://localhost:8080/api/v2/search?q={resource.service.name = "checkout"}
 
 ---
 
-### 3. `/api/v2/search/tags` - List Available Tags
+### 4. `/api/v2/search/tags` - List Available Tags
 
 Returns list of all available TraceQL tags/fields for autocomplete.
 
@@ -139,7 +199,7 @@ curl 'http://localhost:8080/api/v2/search/tags' \
 
 ---
 
-### 4. `/api/v2/search/tag/{tagName}/values` - Get Tag Values
+### 5. `/api/v2/search/tag/{tagName}/values` - Get Tag Values
 
 Returns distinct values for a specific tag, used for autocomplete dropdowns.
 
