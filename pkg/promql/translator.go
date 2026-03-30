@@ -16,6 +16,7 @@ type Translator struct {
 	tenantID    int
 	start       *time.Time        // Optional start time for range queries
 	end         *time.Time        // Optional end time for range queries
+	step        *time.Duration    // Optional step for time bucketing in range queries
 	metricNames map[string]string // Maps normalized names (underscores) to original names (dots)
 }
 
@@ -47,10 +48,11 @@ func (t *Translator) TranslateQuery(promql string) ([]string, error) {
 }
 
 // TranslateQueryWithTimeRange parses PromQL and translates to Pinot SQL with time range filter
-func (t *Translator) TranslateQueryWithTimeRange(promql string, start, end *time.Time) ([]string, error) {
-	// Store time range in translator
+func (t *Translator) TranslateQueryWithTimeRange(promql string, start, end *time.Time, step *time.Duration) ([]string, error) {
+	// Store time range and step in translator
 	t.start = start
 	t.end = end
+	t.step = step
 
 	// Use regular translation
 	return t.TranslateQuery(promql)
@@ -94,9 +96,6 @@ func (t *Translator) translateVectorSelector(vs *parser.VectorSelector) (string,
 		return "", fmt.Errorf("offset modifier not supported (offset %v)", vs.OriginalOffset)
 	}
 
-	// Start with base query
-	sql := fmt.Sprintf("SELECT * FROM otel_metrics WHERE tenant_id = %d", t.tenantID)
-
 	// Extract metric name from label matchers
 	metricName := ""
 	additionalMatchers := make([]*labels.Matcher, 0)
@@ -116,6 +115,68 @@ func (t *Translator) translateVectorSelector(vs *parser.VectorSelector) (string,
 			additionalMatchers = append(additionalMatchers, matcher)
 		}
 	}
+
+	// Determine if we need time bucketing (range query with step)
+	needsBucketing := t.start != nil && t.end != nil && t.step != nil
+
+	// Build SELECT clause
+	var selectClause string
+	var groupByClause string
+
+	if needsBucketing {
+		// Time bucketing: bucket timestamp to step intervals
+		stepMillis := t.step.Milliseconds()
+
+		// Build list of label columns to group by
+		labelColumns := make([]string, 0)
+		for _, matcher := range additionalMatchers {
+			nativeColumn := getNativeColumn(matcher.Name)
+			if nativeColumn != "" {
+				labelColumns = append(labelColumns, nativeColumn)
+			} else {
+				labelColumns = append(labelColumns, fmt.Sprintf("JSON_EXTRACT_SCALAR(attributes, '$.%s', 'STRING')", matcher.Name))
+			}
+		}
+
+		// SELECT with bucketed timestamp + labels + aggregated value
+		// Note 1: Use "ts" instead of "timestamp" as alias because timestamp is a reserved keyword in Pinot
+		// Note 2: Use FLOOR() for proper integer division (Pinot does float division otherwise)
+		selectClause = fmt.Sprintf("FLOOR(\"timestamp\" / %d) * %d AS ts", stepMillis, stepMillis)
+		if metricName != "" {
+			selectClause += ", metric_name"
+		}
+		for i, matcher := range additionalMatchers {
+			selectClause += ", " + labelColumns[i] + " AS " + matcher.Name
+		}
+		selectClause += ", AVG(value) AS value" // Use AVG for bucketing
+
+		// GROUP BY bucketed timestamp + labels
+		// Note: Must use FLOOR() to match SELECT clause
+		groupByClause = " GROUP BY FLOOR(\"timestamp\" / " + fmt.Sprintf("%d", stepMillis) + ")"
+		if metricName != "" {
+			groupByClause += ", metric_name"
+		}
+		for _, matcher := range additionalMatchers {
+			groupByClause += ", " + matcher.Name
+		}
+		groupByClause += " ORDER BY ts" // Order by the alias
+
+		// Calculate LIMIT based on time range and step
+		// Pinot has a default LIMIT of 10 for GROUP BY, so we must specify explicitly
+		if t.start != nil && t.end != nil {
+			rangeDuration := t.end.Sub(*t.start)
+			maxBuckets := int(rangeDuration.Milliseconds()/stepMillis) + 1
+			// Add some buffer for safety (e.g., partial buckets at boundaries)
+			limit := maxBuckets + 10
+			groupByClause += fmt.Sprintf(" LIMIT %d", limit)
+		}
+	} else {
+		// No bucketing - return all data points
+		selectClause = "*"
+	}
+
+	// Build WHERE clause
+	sql := fmt.Sprintf("SELECT %s FROM otel_metrics WHERE tenant_id = %d", selectClause, t.tenantID)
 
 	// Add metric name filter
 	// Translate normalized name (underscores) back to original OTel name (dots)
@@ -138,6 +199,11 @@ func (t *Translator) translateVectorSelector(vs *parser.VectorSelector) (string,
 		startMillis := t.start.UnixMilli()
 		endMillis := t.end.UnixMilli()
 		sql += fmt.Sprintf(" AND \"timestamp\" >= %d AND \"timestamp\" <= %d", startMillis, endMillis)
+	}
+
+	// Add GROUP BY if bucketing
+	if needsBucketing {
+		sql += groupByClause
 	}
 
 	return sql, nil
@@ -252,6 +318,40 @@ func (t *Translator) translateAggregate(ae *parser.AggregateExpr) (string, error
 	var selectClause string
 	var groupByClause string
 
+	// Check if base query already has time bucketing (contains GROUP BY)
+	hasTimeBucketing := strings.Contains(baseSQL, "GROUP BY")
+
+	if hasTimeBucketing {
+		// If inner query has time bucketing, we need to wrap it in a subquery
+		// and aggregate over the bucketed results
+		// Note: Inner query uses "ts" as timestamp alias (not "timestamp" which is reserved)
+		if len(ae.Grouping) > 0 {
+			// sum by (label1, label2) with time bucketing
+			groupFields := make([]string, 0, len(ae.Grouping))
+			groupFields = append(groupFields, "ts") // Include ts from bucketing (not "timestamp")
+
+			for _, label := range ae.Grouping {
+				groupFields = append(groupFields, label)
+			}
+
+			selectClause = strings.Join(groupFields, ", ") + ", " + aggFunc + " AS value"
+			groupByClause = " GROUP BY " + strings.Join(groupFields, ", ")
+		} else {
+			// Just aggregation across time buckets
+			selectClause = "ts, " + aggFunc + " AS value GROUP BY ts"
+			groupByClause = ""
+		}
+
+		// Wrap inner query
+		sql := fmt.Sprintf("SELECT %s FROM (%s) AS bucketed_data", selectClause, baseSQL)
+		sql += groupByClause
+		if groupByClause != "" {
+			sql += " ORDER BY ts"
+		}
+		return sql, nil
+	}
+
+	// No time bucketing - original logic
 	if len(ae.Grouping) > 0 {
 		// sum by (label1, label2)
 		groupFields := make([]string, 0, len(ae.Grouping))

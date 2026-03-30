@@ -155,6 +155,10 @@ func TransformToPrometheusRange(results []PinotResult) PrometheusResponse {
 	// Find column indices
 	valueIdx := findColumn(result.Columns, "value")
 	timestampIdx := findColumn(result.Columns, "timestamp")
+	// Also check for "ts" which is used in bucketed queries (timestamp is a reserved keyword)
+	if timestampIdx == -1 {
+		timestampIdx = findColumn(result.Columns, "ts")
+	}
 	metricNameIdx := findColumn(result.Columns, "metric_name")
 
 	if valueIdx == -1 {
@@ -169,14 +173,14 @@ func TransformToPrometheusRange(results []PinotResult) PrometheusResponse {
 		return PrometheusResponse{
 			Status:    "error",
 			ErrorType: "bad_data",
-			Error:     "missing 'timestamp' column in query results",
+			Error:     "missing 'timestamp' or 'ts' column in query results",
 		}
 	}
 
-	// Extract label columns
+	// Extract label columns (excluding known system columns)
 	labelColumns := make([]string, 0)
 	for _, col := range result.Columns {
-		if col != "value" && col != "timestamp" && col != "metric_name" && col != "tenant_id" {
+		if col != "value" && col != "timestamp" && col != "ts" && col != "metric_name" && col != "tenant_id" {
 			labelColumns = append(labelColumns, col)
 		}
 	}

@@ -116,9 +116,9 @@ func (s *Server) handlePrometheusQueryRange(w http.ResponseWriter, r *http.Reque
 			tenantID, params.Start, params.End, params.Step, params.Query)
 	}
 
-	// Translate PromQL to SQL with time range
+	// Translate PromQL to SQL with time range and step
 	translator := promql.NewTranslator(tenantID)
-	sqlQueries, err := translator.TranslateQueryWithTimeRange(params.Query, &params.Start, &params.End)
+	sqlQueries, err := translator.TranslateQueryWithTimeRange(params.Query, &params.Start, &params.End, &params.Step)
 	if err != nil {
 		if s.debugTranslation {
 			fmt.Printf("[DEBUG TRANSLATION] PromQL translation error: %v\n", err)

@@ -3,6 +3,7 @@ package promql
 import (
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestVectorSelector(t *testing.T) {
@@ -537,6 +538,81 @@ func TestScalarArithmetic(t *testing.T) {
 			for _, want := range tt.wantContains {
 				if !strings.Contains(gotSQL, want) {
 					t.Errorf("SQL should contain %q\ngot: %s", want, gotSQL)
+				}
+			}
+		})
+	}
+}
+
+func TestTimeBucketing(t *testing.T) {
+	tests := []struct {
+		name         string
+		query        string
+		stepSeconds  int
+		wantContains []string
+	}{
+		{
+			name:        "simple metric with 15s step",
+			query:       "http_requests_total",
+			stepSeconds: 15,
+			wantContains: []string{
+				"FLOOR(\"timestamp\" / 15000) * 15000 AS ts", // 15s = 15000ms, use FLOOR for integer division
+				"AVG(value) AS value",
+				"GROUP BY FLOOR",
+				"ORDER BY ts",
+				"LIMIT", // Pinot default GROUP BY limit is 10, we need explicit LIMIT
+			},
+		},
+		{
+			name:        "metric with labels and 1m step",
+			query:       "http_requests_total{job=\"api\"}",
+			stepSeconds: 60,
+			wantContains: []string{
+				"FLOOR(\"timestamp\" / 60000) * 60000 AS ts", // 1m = 60000ms, use FLOOR for integer division
+				"job",
+				"AVG(value) AS value",
+				"GROUP BY FLOOR",
+				"LIMIT",
+			},
+		},
+		{
+			name:        "aggregation with time bucketing",
+			query:       "sum by (service_name) (http_requests_total)",
+			stepSeconds: 30,
+			wantContains: []string{
+				"FLOOR(\"timestamp\" / 30000) * 30000", // 30s = 30000ms, use FLOOR
+				"SUM(value)",
+				"bucketed_data", // Subquery wrapper
+				"LIMIT",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			translator := NewTranslator(0)
+			
+			// Create time range and step
+			now := time.Now()
+			start := now.Add(-1 * time.Hour)
+			step := time.Duration(tt.stepSeconds) * time.Second
+			
+			sqlQueries, err := translator.TranslateQueryWithTimeRange(tt.query, &start, &now, &step)
+
+			if err != nil {
+				t.Fatalf("Unexpected error: %v", err)
+			}
+
+			if len(sqlQueries) == 0 {
+				t.Fatal("No SQL queries returned")
+			}
+
+			sqlStr := sqlQueries[0]
+			t.Logf("Generated SQL: %s", sqlStr)
+
+			for _, want := range tt.wantContains {
+				if !strings.Contains(sqlStr, want) {
+					t.Errorf("SQL should contain %q\nGot: %s", want, sqlStr)
 				}
 			}
 		})
