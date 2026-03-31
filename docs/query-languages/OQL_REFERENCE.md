@@ -48,7 +48,32 @@ Limit the number of rows returned.
 signal=spans where duration > 1s limit 100
 ```
 
-### 3. `expand trace` - Reconstruct Full Traces
+### 3. `sort` - Order Results
+
+Sort query results by one or more fields in ascending or descending order.
+
+```oql
+# Sort by duration (ascending by default)
+signal=spans | sort duration
+
+# Sort by duration descending (slowest first)
+signal=spans | sort duration desc
+
+# Sort by multiple fields
+signal=spans | sort duration desc, name asc
+
+# Combined with where and limit
+signal=spans | where duration > 500ms | sort duration desc | limit 10
+
+# Get most recent errors
+signal=logs | where level="error" | sort timestamp desc | limit 100
+```
+
+**Syntax**: `sort field1 [asc|desc], field2 [asc|desc], ...`
+- **asc**: Ascending order (default)
+- **desc**: Descending order
+
+### 4. `expand trace` - Reconstruct Full Traces
 
 Fetch all spans sharing the same `trace_id` (the "magic" operator for trace reconstruction).
 
@@ -57,7 +82,7 @@ Fetch all spans sharing the same `trace_id` (the "magic" operator for trace reco
 signal=spans where name == "checkout" and duration > 500ms limit 1 expand trace
 ```
 
-### 4. `correlate` - Cross-Signal Correlation
+### 5. `correlate` - Cross-Signal Correlation
 
 Find matching data from other signals based on `trace_id`.
 
@@ -69,7 +94,7 @@ signal=spans where attributes.error == "true" correlate logs, metrics
 signal=spans where duration > 5s correlate logs
 ```
 
-### 5. `extract` - Extract Field Values
+### 6. `extract` - Extract Field Values
 
 Extract a specific field value into an alias for later use.
 
@@ -78,7 +103,7 @@ Extract a specific field value into an alias for later use.
 signal=metrics where value > 5000 extract exemplar.trace_id as bad_trace
 ```
 
-### 6. `switch_context` - Jump Between Signals
+### 7. `switch_context` - Jump Between Signals
 
 Explicitly switch from one signal type to another.
 
@@ -89,7 +114,7 @@ switch_context signal=spans
 where trace_id == {extracted_id}
 ```
 
-### 7. `filter` - Progressive Refinement
+### 8. `filter` - Progressive Refinement
 
 Refine existing result set without starting a new query (useful for interactive exploration).
 
@@ -101,7 +126,7 @@ signal=spans where duration > 5s
 filter attributes.error == true
 ```
 
-### 8. `get_exemplars()` - The Wormhole
+### 9. `get_exemplars()` - The Wormhole
 
 Extract exemplar `trace_ids` from aggregated metrics - this is the "wormhole" from aggregation space to event space.
 
@@ -117,7 +142,7 @@ signal=metrics where value > 5000 get_exemplars() expand trace correlate logs
 
 ## Aggregation Operations
 
-### 9. `avg` / `min` / `max` / `sum` / `count`
+### 10. `avg` / `min` / `max` / `sum` / `count`
 
 Aggregate data with statistical functions.
 
@@ -142,7 +167,7 @@ signal=spans max(duration)
 signal=metrics sum(value)
 ```
 
-### 10. `group by` - Group Results
+### 11. `group by` - Group Results
 
 Group data by one or more fields (typically used with aggregations).
 
@@ -161,7 +186,7 @@ signal=spans group by service_name, http_method avg(duration)
 
 ## Time Range Operations
 
-### 11. `since` - Relative Time Range
+### 12. `since` - Relative Time Range
 
 Filter data from a relative time in the past.
 
@@ -179,7 +204,7 @@ signal=metrics since 48h
 signal=spans since 2024-03-20
 ```
 
-### 12. `between` - Absolute Time Range
+### 13. `between` - Absolute Time Range
 
 Filter data between two specific timestamps.
 
