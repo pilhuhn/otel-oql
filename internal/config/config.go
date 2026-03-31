@@ -31,6 +31,9 @@ type Config struct {
 	// MCP Server
 	MCPPort int `yaml:"mcp_port"`
 
+	// Operating mode
+	Mode string `yaml:"mode"` // Operating mode: "all" (default), "ingestion", or "query"
+
 	// Observability (self-instrumentation)
 	ObservabilityEnabled  bool   `yaml:"observability_enabled"`  // Enable self-observability
 	ObservabilityEndpoint string `yaml:"observability_endpoint"` // OTLP gRPC endpoint (default: localhost:4317)
@@ -59,6 +62,7 @@ func Load() (*Config, error) {
 	var otlpHTTPPort int
 	var queryAPIPort int
 	var mcpPort int
+	var mode string
 	var testMode bool
 	var obsEnabled bool
 	var obsEndpoint string
@@ -75,6 +79,7 @@ func Load() (*Config, error) {
 	flag.BoolVar(&testMode, "test-mode", false, "Enable test mode (default tenant-id=0)")
 	flag.IntVar(&queryAPIPort, "query-api-port", 0, "Query API server port")
 	flag.IntVar(&mcpPort, "mcp-port", 0, "MCP server port")
+	flag.StringVar(&mode, "mode", "", "Operating mode: all, ingestion, or query (default: all)")
 	flag.BoolVar(&obsEnabled, "observability-enabled", false, "Enable self-observability")
 	flag.StringVar(&obsEndpoint, "observability-endpoint", "", "OTLP endpoint for self-observability")
 	flag.StringVar(&obsTenantID, "observability-tenant-id", "", "Tenant ID for self-observability")
@@ -116,6 +121,9 @@ func Load() (*Config, error) {
 		if val, err := strconv.Atoi(env); err == nil {
 			cfg.MCPPort = val
 		}
+	}
+	if env := os.Getenv("OTEL_OQL_MODE"); env != "" {
+		cfg.Mode = env
 	}
 	if env := os.Getenv("TEST_MODE"); env != "" {
 		if val, err := strconv.ParseBool(env); err == nil {
@@ -173,6 +181,9 @@ func Load() (*Config, error) {
 	if mcpPort != 0 {
 		cfg.MCPPort = mcpPort
 	}
+	if mode != "" {
+		cfg.Mode = mode
+	}
 	// testMode from flags is handled specially since false is the default
 	if flag.Lookup("test-mode").Value.String() == "true" {
 		cfg.TestMode = true
@@ -227,6 +238,9 @@ func Load() (*Config, error) {
 	if cfg.MCPPort == 0 {
 		cfg.MCPPort = 8090
 	}
+	if cfg.Mode == "" {
+		cfg.Mode = "all" // Default to all-in-one mode
+	}
 	// Observability defaults
 	if cfg.ObservabilityEndpoint == "" {
 		cfg.ObservabilityEndpoint = "localhost:4317"
@@ -240,31 +254,64 @@ func Load() (*Config, error) {
 	}
 
 	// Validate configuration
-	if cfg.PinotURL == "" {
-		return nil, fmt.Errorf("pinot-url is required")
-	}
-
-	if cfg.KafkaBrokers == "" {
-		return nil, fmt.Errorf("kafka-brokers is required")
-	}
-
-	if cfg.OTLPGRPCPort <= 0 || cfg.OTLPGRPCPort > 65535 {
-		return nil, fmt.Errorf("invalid otlp-grpc-port: %d", cfg.OTLPGRPCPort)
-	}
-
-	if cfg.OTLPHTTPPort <= 0 || cfg.OTLPHTTPPort > 65535 {
-		return nil, fmt.Errorf("invalid otlp-http-port: %d", cfg.OTLPHTTPPort)
-	}
-
-	if cfg.QueryAPIPort <= 0 || cfg.QueryAPIPort > 65535 {
-		return nil, fmt.Errorf("invalid query-api-port: %d", cfg.QueryAPIPort)
-	}
-
-	if cfg.MCPPort <= 0 || cfg.MCPPort > 65535 {
-		return nil, fmt.Errorf("invalid mcp-port: %d", cfg.MCPPort)
+	if err := cfg.validate(); err != nil {
+		return nil, err
 	}
 
 	return cfg, nil
+}
+
+// validate checks configuration based on operating mode
+func (cfg *Config) validate() error {
+	// Validate mode
+	switch cfg.Mode {
+	case "all", "ingestion", "query":
+		// Valid modes
+	default:
+		return fmt.Errorf("invalid mode: %s (must be: all, ingestion, query)", cfg.Mode)
+	}
+
+	// Mode-specific validation
+	switch cfg.Mode {
+	case "ingestion":
+		if cfg.KafkaBrokers == "" {
+			return fmt.Errorf("kafka-brokers is required for ingestion mode")
+		}
+		// Pinot URL not required in ingestion mode
+	case "query":
+		if cfg.PinotURL == "" {
+			return fmt.Errorf("pinot-url is required for query mode")
+		}
+		// Kafka not required in query mode
+	case "all":
+		if cfg.PinotURL == "" {
+			return fmt.Errorf("pinot-url is required")
+		}
+		if cfg.KafkaBrokers == "" {
+			return fmt.Errorf("kafka-brokers is required")
+		}
+	}
+
+	// Port validation based on mode
+	if cfg.Mode == "ingestion" || cfg.Mode == "all" {
+		if cfg.OTLPGRPCPort <= 0 || cfg.OTLPGRPCPort > 65535 {
+			return fmt.Errorf("invalid otlp-grpc-port: %d", cfg.OTLPGRPCPort)
+		}
+		if cfg.OTLPHTTPPort <= 0 || cfg.OTLPHTTPPort > 65535 {
+			return fmt.Errorf("invalid otlp-http-port: %d", cfg.OTLPHTTPPort)
+		}
+	}
+
+	if cfg.Mode == "query" || cfg.Mode == "all" {
+		if cfg.QueryAPIPort <= 0 || cfg.QueryAPIPort > 65535 {
+			return fmt.Errorf("invalid query-api-port: %d", cfg.QueryAPIPort)
+		}
+		if cfg.MCPPort <= 0 || cfg.MCPPort > 65535 {
+			return fmt.Errorf("invalid mcp-port: %d", cfg.MCPPort)
+		}
+	}
+
+	return nil
 }
 
 // loadConfigFile loads configuration from a YAML file

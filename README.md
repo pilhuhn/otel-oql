@@ -16,6 +16,7 @@ A multi-tenant OpenTelemetry data ingestion and query service with OQL (Observab
 - **MCP Server**: Model Context Protocol server for AI tool integration (port 8090)
 - **CLI Query Tool**: Interactive command-line client for executing queries in any language
 - **Self-Observability**: OpenTelemetry instrumentation for traces and metrics
+- **Split Deployment**: Run ingestion and query components independently for scalability
 
 ## Quick Start
 
@@ -75,6 +76,7 @@ Configuration via environment variables or command-line flags:
 
 | Flag | Environment Variable | Default | Description |
 |------|---------------------|---------|-------------|
+| `--mode` | `OTEL_OQL_MODE` | `all` | Operating mode: `all`, `ingestion`, or `query` |
 | `--pinot-url` | `PINOT_URL` | `http://localhost:9000` | Pinot broker URL |
 | `--otlp-grpc-port` | `OTLP_GRPC_PORT` | `4317` | OTLP gRPC receiver port |
 | `--otlp-http-port` | `OTLP_HTTP_PORT` | `4318` | OTLP HTTP receiver port |
@@ -548,6 +550,38 @@ All requests must include a tenant-id:
 - **HTTP**: Set `X-Tenant-ID` header
 
 In test mode, if no tenant-id is provided, it defaults to 0.
+
+## Split Deployment
+
+OTEL-OQL supports three operating modes for flexible deployment:
+
+### Operating Modes
+
+1. **All-in-One** (default): Single process runs ingestion + query
+2. **Ingestion**: Only OTLP receivers and Kafka ingestion
+3. **Query**: Only query API and MCP server
+
+### Usage
+
+```bash
+# Ingestion-only mode (scale for high OTLP load)
+./otel-oql --mode=ingestion --kafka-brokers=kafka:9092
+
+# Query-only mode (scale for high query load)
+./otel-oql --mode=query --pinot-url=http://pinot:9000
+
+# All-in-one mode (default, good for dev/test)
+./otel-oql  # or --mode=all
+```
+
+### Benefits
+
+- **Independent scaling**: Scale ingestion and query separately
+- **Resource isolation**: CPU-bound ingestion vs memory-bound queries
+- **Security boundaries**: Public ingestion vs private query API
+- **Fault isolation**: Component failures don't cascade
+
+See [docs/SPLIT_DEPLOYMENT.md](docs/SPLIT_DEPLOYMENT.md) for complete deployment guide with Kubernetes and Docker Compose examples.
 
 ## Architecture
 

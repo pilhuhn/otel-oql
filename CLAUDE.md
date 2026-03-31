@@ -400,6 +400,47 @@ For local development:
 - Allows ingestion without explicit tenant headers
 - Should NOT be enabled in production
 
+### Split Deployment
+
+OTEL-OQL supports three operating modes for flexible deployment:
+
+**All-in-One Mode** (default): `--mode=all`
+- Runs both ingestion and query in a single process
+- Suitable for development, testing, and small deployments
+- All components active: OTLP receivers, Kafka producer, Query API, MCP server
+
+**Ingestion Mode**: `--mode=ingestion`
+- Runs only OTLP receivers and Kafka ingestion
+- Does NOT require Pinot connection
+- Components: OTLP gRPC/HTTP receivers, Kafka producer, tenant validation
+- Use case: Scale ingestion independently, deploy in DMZ for external traffic
+
+**Query Mode**: `--mode=query`
+- Runs only Query API and MCP server
+- Does NOT accept OTLP data
+- Components: Query API, MCP server, Pinot client, tenant validation
+- Use case: Scale query workloads independently, deploy in private zone
+
+**Configuration**:
+```bash
+# Environment variable
+export OTEL_OQL_MODE=ingestion  # or "query" or "all"
+
+# Command-line flag
+./otel-oql --mode=ingestion
+
+# Config file
+mode: ingestion
+```
+
+**Benefits**:
+- Independent horizontal scaling (scale ingestion vs query based on load)
+- Resource isolation (CPU-bound ingestion vs memory-bound queries)
+- Security boundaries (public ingestion vs private query API)
+- Fault isolation (component failures don't cascade)
+
+See [docs/SPLIT_DEPLOYMENT.md](docs/SPLIT_DEPLOYMENT.md) for complete deployment guide.
+
 ### Signal Types
 
 Three OpenTelemetry signal types are supported:
@@ -481,6 +522,7 @@ podman-compose up -d
 
 ### Environment Variables
 
+- `OTEL_OQL_MODE`: Operating mode - `all`, `ingestion`, or `query` (default: all)
 - `PINOT_URL`: Apache Pinot broker URL (default: http://localhost:8000)
 - `KAFKA_BROKERS`: Kafka broker addresses (default: localhost:9092)
 - `OTLP_GRPC_PORT`: gRPC receiver port (default: 4317)
