@@ -43,6 +43,17 @@ func (t *Translator) TranslateQuery(query *oql.Query) ([]string, error) {
 		case *oql.LimitOp:
 			sql += fmt.Sprintf(" LIMIT %d", v.Count)
 
+		case *oql.SortOp:
+			orderByClauses := make([]string, 0, len(v.Fields))
+			for _, field := range v.Fields {
+				direction := "ASC"
+				if field.Desc {
+					direction = "DESC"
+				}
+				orderByClauses = append(orderByClauses, fmt.Sprintf("%s %s", field.Field, direction))
+			}
+			sql += fmt.Sprintf(" ORDER BY %s", strings.Join(orderByClauses, ", "))
+
 		case *oql.ExpandOp:
 			// Expand requires a follow-up query
 			// First query gets the initial results, then we expand based on trace_id

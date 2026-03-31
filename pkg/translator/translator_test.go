@@ -685,3 +685,88 @@ func TestTranslator_MaliciousFieldExpressionRejected(t *testing.T) {
 	_, err := translator.TranslateQuery(query)
 	require.Error(t, err)
 }
+
+func TestTranslator_Sort(t *testing.T) {
+	tests := []struct {
+		name     string
+		query    *oql.Query
+		wantSQL  []string
+		tenantID int
+	}{
+		{
+			name: "sort single field ascending",
+			query: &oql.Query{
+				Signal: oql.SignalSpans,
+				Operations: []oql.Operation{
+					&oql.SortOp{
+						Fields: []oql.SortField{{Field: "duration", Desc: false}},
+					},
+				},
+			},
+			wantSQL:  []string{"SELECT * FROM otel_spans WHERE tenant_id = 0 ORDER BY duration ASC"},
+			tenantID: 0,
+		},
+		{
+			name: "sort single field descending",
+			query: &oql.Query{
+				Signal: oql.SignalSpans,
+				Operations: []oql.Operation{
+					&oql.SortOp{
+						Fields: []oql.SortField{{Field: "duration", Desc: true}},
+					},
+				},
+			},
+			wantSQL:  []string{"SELECT * FROM otel_spans WHERE tenant_id = 0 ORDER BY duration DESC"},
+			tenantID: 0,
+		},
+		{
+			name: "sort multiple fields",
+			query: &oql.Query{
+				Signal: oql.SignalSpans,
+				Operations: []oql.Operation{
+					&oql.SortOp{
+						Fields: []oql.SortField{
+							{Field: "duration", Desc: true},
+							{Field: "name", Desc: false},
+						},
+					},
+				},
+			},
+			wantSQL:  []string{"SELECT * FROM otel_spans WHERE tenant_id = 0 ORDER BY duration DESC, name ASC"},
+			tenantID: 0,
+		},
+		{
+			name: "sort with where and limit",
+			query: &oql.Query{
+				Signal: oql.SignalSpans,
+				Operations: []oql.Operation{
+					&oql.WhereOp{Condition: &oql.BinaryCondition{Left: "duration", Operator: ">", Right: int64(500000000)}},
+					&oql.SortOp{Fields: []oql.SortField{{Field: "duration", Desc: true}}},
+					&oql.LimitOp{Count: 10},
+				},
+			},
+			wantSQL:  []string{"SELECT * FROM otel_spans WHERE tenant_id = 0 AND duration > 500000000 ORDER BY duration DESC LIMIT 10"},
+			tenantID: 0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			trans := NewTranslator(tt.tenantID)
+			gotSQL, err := trans.TranslateQuery(tt.query)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+
+			if len(gotSQL) != len(tt.wantSQL) {
+				t.Fatalf("got %d SQL queries, want %d", len(gotSQL), len(tt.wantSQL))
+			}
+
+			for i, want := range tt.wantSQL {
+				if gotSQL[i] != want {
+					t.Errorf("query %d:\ngot:  %s\nwant: %s", i, gotSQL[i], want)
+				}
+			}
+		})
+	}
+}

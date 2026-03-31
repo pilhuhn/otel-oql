@@ -118,7 +118,7 @@ func run() error {
 	}
 
 	// Start MCP server
-	if err := mcpServer.Start(ctx); err != nil {
+	if err := mcpServer.Start(); err != nil {
 		return fmt.Errorf("failed to start MCP server: %w", err)
 	}
 

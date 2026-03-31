@@ -76,6 +76,19 @@ type LimitOp struct {
 
 func (LimitOp) operation() {}
 
+// SortOp represents a sort/order by operation
+type SortOp struct {
+	Fields []SortField
+}
+
+func (SortOp) operation() {}
+
+// SortField represents a field to sort by
+type SortField struct {
+	Field string
+	Desc  bool // true for descending, false for ascending
+}
+
 // AggregateOp represents an aggregation operation
 type AggregateOp struct {
 	Function string   // avg, min, max, count, sum

@@ -94,6 +94,8 @@ func (p *Parser) parseOperation() (Operation, error) {
 		return p.parseFilter()
 	case "limit":
 		return p.parseLimit()
+	case "sort":
+		return p.parseSort()
 	case "aggregate", "avg", "min", "max", "count", "sum":
 		return p.parseAggregate()
 	case "group":
@@ -409,6 +411,67 @@ func (p *Parser) parseLimit() (Operation, error) {
 	return &LimitOp{Count: count}, nil
 }
 
+// parseSort parses a sort operation
+// Syntax: sort field1, field2 desc, field3 asc
+func (p *Parser) parseSort() (Operation, error) {
+	p.consumeWord("sort")
+	p.skipWhitespace()
+
+	// Read until pipe or end
+	sortStr := p.readUntil(operationKeywords())
+	sortStr = strings.TrimSpace(sortStr)
+
+	if sortStr == "" {
+		return nil, fmt.Errorf("sort requires at least one field")
+	}
+
+	// Parse comma-separated fields
+	fields := []SortField{}
+	parts := strings.Split(sortStr, ",")
+
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+
+		// Check for desc/asc suffix
+		tokens := strings.Fields(part)
+		if len(tokens) == 0 {
+			continue
+		}
+
+		field := tokens[0]
+		desc := false
+
+		if len(tokens) > 1 {
+			direction := strings.ToLower(tokens[len(tokens)-1])
+			if direction == "desc" {
+				desc = true
+				// Join all tokens except the last as the field name
+				field = strings.Join(tokens[:len(tokens)-1], " ")
+			} else if direction == "asc" {
+				desc = false
+				field = strings.Join(tokens[:len(tokens)-1], " ")
+			} else {
+				// No direction specified, treat entire part as field name
+				field = part
+			}
+		}
+
+		fields = append(fields, SortField{
+			Field: field,
+			Desc:  desc,
+		})
+	}
+
+	if len(fields) == 0 {
+		return nil, fmt.Errorf("sort requires at least one field")
+	}
+
+	return &SortOp{Fields: fields}, nil
+}
+
 // Helper methods
 
 func (p *Parser) peek() byte {
@@ -461,7 +524,7 @@ func (p *Parser) readUntil(delimiters []string) string {
 
 // operationKeywords returns a list of all operation keywords with and without leading spaces
 func operationKeywords() []string {
-	ops := []string{"where", "expand", "correlate", "get_exemplars", "switch_context", "extract", "filter", "limit", "aggregate", "avg", "min", "max", "count", "sum", "group", "since", "between"}
+	ops := []string{"where", "expand", "correlate", "get_exemplars", "switch_context", "extract", "filter", "limit", "sort", "aggregate", "avg", "min", "max", "count", "sum", "group", "since", "between"}
 	result := []string{"|", "\n", ""}
 	for _, op := range ops {
 		result = append(result, " "+op+" ")
