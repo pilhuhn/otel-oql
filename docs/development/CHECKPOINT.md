@@ -25,8 +25,8 @@ Successfully implemented a complete multi-tenant OpenTelemetry data ingestion an
 
 **Previous Updates** (March 23, 2026):
 - ✅ **End-to-End Working** - Complete data flow verified: OTLP → Kafka → Pinot → OQL queries
-- ✅ **Simplified Setup** - `compose-simple.yaml` with minimal dependencies (Kafka + Pinot only)
-- ✅ **Setup Script** - `scripts/setup-simple.sh` automates full environment setup
+- ✅ **Simplified Setup** - `compose.yaml` with minimal dependencies (Kafka + Pinot only)
+- ✅ **Setup Script** - `scripts/setup-all.sh` automates full environment setup
 - ✅ **Fixed Pinot Integration** - Corrected query endpoint from `/query/sql` to `/sql`
 - ✅ **Fixed CLI Headers** - Corrected header from `X-Tenant-ID` to `tenant-id`
 - ✅ **User-Friendly Errors** - Enhanced error messages for unreachable services

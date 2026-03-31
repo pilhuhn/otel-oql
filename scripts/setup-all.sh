@@ -23,18 +23,31 @@ echo ""
 # Step 2: Start infrastructure with compose
 echo "🐳 Step 2: Starting Kafka and Pinot with compose..."
 podman compose up -d
-echo "⏳ Waiting for services to be healthy (30 seconds)..."
-sleep 30
+echo "⏳ Waiting for services to be healthy (40 seconds)..."
+sleep 40
 echo ""
 
-# Step 3: Initialize schemas
-echo "📊 Step 3: Creating Pinot schemas..."
+# Step 3: Create Kafka topics
+echo "📝 Step 3: Creating Kafka topics..."
+for topic in otel-spans otel-metrics otel-logs; do
+    podman exec kafka /opt/kafka/bin/kafka-topics.sh \
+        --create \
+        --topic $topic \
+        --bootstrap-server localhost:9092 \
+        --partitions 3 \
+        --replication-factor 1 2>&1 || echo "  Topic $topic may already exist"
+done
+echo "✅ Kafka topics created"
+echo ""
+
+# Step 4: Initialize schemas
+echo "📊 Step 4: Creating Pinot schemas..."
 ./otel-oql setup-schema --pinot-url=http://localhost:9000
 echo "✅ Schemas created"
 echo ""
 
-# Step 4: Verify setup
-echo "🔍 Step 4: Verifying setup..."
+# Step 5: Verify setup
+echo "🔍 Step 5: Verifying setup..."
 ./scripts/verify-setup.sh
 echo ""
 
