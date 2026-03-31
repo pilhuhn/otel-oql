@@ -879,9 +879,10 @@ type TempoTraceSpan struct {
 	SpanID            string           `json:"spanId"`
 	ParentSpanID      string           `json:"parentSpanId,omitempty"`
 	Name              string           `json:"name"`
-	Kind              string           `json:"kind,omitempty"`
+	Kind              int              `json:"kind,omitempty"` // OTLP SpanKind enum (0-5)
 	StartTimeUnixNano string           `json:"startTimeUnixNano"`
-	DurationNanos     string           `json:"durationNanos"`
+	EndTimeUnixNano   string           `json:"endTimeUnixNano"` // Required by OTLP
+	DurationNanos     string           `json:"durationNanos,omitempty"` // Optional, for convenience
 	Attributes        []TempoAttribute `json:"attributes,omitempty"`
 	Status            TempoStatus      `json:"status,omitempty"`
 }
@@ -920,7 +921,7 @@ func boolValue(b bool) TempoAnyValue {
 
 // TempoStatus represents span status
 type TempoStatus struct {
-	Code    string `json:"code,omitempty"`
+	Code    int    `json:"code,omitempty"` // OTLP StatusCode enum (0-2)
 	Message string `json:"message,omitempty"`
 }
 
@@ -942,16 +943,14 @@ func (s *Server) handleTempoTraceByID(w http.ResponseWriter, r *http.Request) {
 
 	// Extract trace ID from URL path
 	// Path can be /api/traces/{traceID} (v1) or /api/v2/traces/{traceID} (v2)
+	// Both now return the same OTLP format with resourceSpans
 	path := r.URL.Path
 	var traceID string
-	var isV2 bool
 
 	if strings.HasPrefix(path, "/api/v2/traces/") {
 		traceID = path[len("/api/v2/traces/"):]
-		isV2 = true
 	} else if strings.HasPrefix(path, "/api/traces/") {
 		traceID = path[len("/api/traces/"):]
-		isV2 = false
 	} else {
 		s.obs.RecordRequest(ctx, "/api/traces/*", time.Since(start), http.StatusBadRequest)
 		http.Error(w, "invalid path", http.StatusBadRequest)
@@ -1043,33 +1042,19 @@ func (s *Server) handleTempoTraceByID(w http.ResponseWriter, r *http.Request) {
 		s.obs.RecordRequest(ctx, "/api/traces/*", time.Since(start), http.StatusOK)
 	} else {
 		// JSON response for other clients (Perses, curl, etc.)
-		if isV2 {
-			// v2 API: OTLP format with resourceSpans
-			trace := s.transformToTempoTraceV2(results[0])
-			s.obs.RecordRequest(ctx, "/api/traces/*", time.Since(start), http.StatusOK)
-			writeJSON(w, http.StatusOK, trace)
-		} else {
-			// v1 API: Tempo format with batches
-			trace := s.transformToTempoTraceV1(results[0])
-			s.obs.RecordRequest(ctx, "/api/traces/*", time.Since(start), http.StatusOK)
-			writeJSON(w, http.StatusOK, trace)
-		}
+		// Use Tempo v1 format with batches
+		trace := s.transformToTempoTraceV1(results[0])
+		s.obs.RecordRequest(ctx, "/api/traces/*", time.Since(start), http.StatusOK)
+		writeJSON(w, http.StatusOK, trace)
 	}
 }
 
 
 // transformToTempoTraceV1 transforms Pinot query results to Tempo v1 trace format (batches)
 func (s *Server) transformToTempoTraceV1(result QueryResult) TempoTraceResponseV1 {
-	// Create resource with attributes
-	resource := TempoResource{
-		Attributes: []TempoAttribute{},
-	}
-
-	// Create scope spans (single scope for now)
-	scopeSpans := TempoScopeSpans{
-		Scope: TempoScope{},
-		Spans: []TempoTraceSpan{},
-	}
+	// Group spans by service_name
+	// Each service gets its own batch/resource in OTLP
+	serviceSpans := make(map[string][]TempoTraceSpan)
 
 	// Convert each row to a span
 	for _, row := range result.Rows {
@@ -1083,44 +1068,57 @@ func (s *Server) transformToTempoTraceV1(result QueryResult) TempoTraceResponseV
 			spanData[col] = row[i]
 		}
 
+		// Extract service name
+		serviceName := "unknown"
+		if svc, ok := spanData["service_name"].(string); ok && svc != "" {
+			serviceName = svc
+		}
+
 		// Build span
 		span := s.buildTempoTraceSpan(spanData)
-		scopeSpans.Spans = append(scopeSpans.Spans, span)
 
-		// Extract resource attributes (from first span)
-		if len(resource.Attributes) == 0 {
-			if serviceName, ok := spanData["service_name"].(string); ok && serviceName != "" {
-				resource.Attributes = append(resource.Attributes, TempoAttribute{
-					Key:   "service.name",
-					Value: stringValue(serviceName),
-				})
-			}
-		}
+		// Group by service
+		serviceSpans[serviceName] = append(serviceSpans[serviceName], span)
 	}
 
-	// Build batch with nested scopeSpans
-	batch := TempoBatch{
-		Resource:   resource,
-		ScopeSpans: []TempoScopeSpans{scopeSpans},
+	// Build batches - one per service
+	batches := make([]TempoBatch, 0, len(serviceSpans))
+	for serviceName, spans := range serviceSpans {
+		// Create resource for this service
+		resource := TempoResource{
+			Attributes: []TempoAttribute{
+				{
+					Key:   "service.name",
+					Value: stringValue(serviceName),
+				},
+			},
+		}
+
+		// Create scope spans
+		scopeSpans := TempoScopeSpans{
+			Scope: TempoScope{},
+			Spans: spans,
+		}
+
+		// Build batch
+		batch := TempoBatch{
+			Resource:   resource,
+			ScopeSpans: []TempoScopeSpans{scopeSpans},
+		}
+
+		batches = append(batches, batch)
 	}
 
 	return TempoTraceResponseV1{
-		Batches: []TempoBatch{batch},
+		Batches: batches,
 	}
 }
 
 // transformToTempoTraceV2 transforms Pinot query results to OTLP v2 trace format (resourceSpans)
 func (s *Server) transformToTempoTraceV2(result QueryResult) TempoTraceResponse {
-	// Create resource with attributes
-	resource := TempoResource{
-		Attributes: []TempoAttribute{},
-	}
-
-	// Create scope spans (single scope for now)
-	scopeSpans := TempoScopeSpans{
-		Scope: TempoScope{},
-		Spans: []TempoTraceSpan{},
-	}
+	// Group spans by service_name
+	// Each service gets its own resourceSpan in OTLP
+	serviceSpans := make(map[string][]TempoTraceSpan)
 
 	// Convert each row to a span
 	for _, row := range result.Rows {
@@ -1134,46 +1132,58 @@ func (s *Server) transformToTempoTraceV2(result QueryResult) TempoTraceResponse 
 			spanData[col] = row[i]
 		}
 
+		// Extract service name
+		serviceName := "unknown"
+		if svc, ok := spanData["service_name"].(string); ok && svc != "" {
+			serviceName = svc
+		}
+
 		// Build span
 		span := s.buildTempoTraceSpan(spanData)
-		scopeSpans.Spans = append(scopeSpans.Spans, span)
 
-		// Extract resource attributes (from first span)
-		if len(resource.Attributes) == 0 {
-			if serviceName, ok := spanData["service_name"].(string); ok && serviceName != "" {
-				resource.Attributes = append(resource.Attributes, TempoAttribute{
-					Key:   "service.name",
-					Value: stringValue(serviceName),
-				})
-			}
-		}
+		// Group by service
+		serviceSpans[serviceName] = append(serviceSpans[serviceName], span)
 	}
 
-	// Build OTLP-compatible response
-	return TempoTraceResponse{
-		ResourceSpans: []TempoResourceSpans{
-			{
-				Resource:   resource,
-				ScopeSpans: []TempoScopeSpans{scopeSpans},
+	// Build resourceSpans - one per service
+	resourceSpans := make([]TempoResourceSpans, 0, len(serviceSpans))
+	for serviceName, spans := range serviceSpans {
+		// Create resource for this service
+		resource := TempoResource{
+			Attributes: []TempoAttribute{
+				{
+					Key:   "service.name",
+					Value: stringValue(serviceName),
+				},
 			},
-		},
+		}
+
+		// Create scope spans
+		scopeSpans := TempoScopeSpans{
+			Scope: TempoScope{},
+			Spans: spans,
+		}
+
+		// Build resourceSpan
+		resourceSpan := TempoResourceSpans{
+			Resource:   resource,
+			ScopeSpans: []TempoScopeSpans{scopeSpans},
+		}
+
+		resourceSpans = append(resourceSpans, resourceSpan)
+	}
+
+	return TempoTraceResponse{
+		ResourceSpans: resourceSpans,
 	}
 }
 
 // transformToOTLPProtobuf converts Pinot query results to OTLP protobuf format
 // This is used when Grafana requests protobuf (Accept: application/protobuf)
 func (s *Server) transformToOTLPProtobuf(result QueryResult) *collectortrace.ExportTraceServiceRequest {
-	resourceSpans := &tracepb.ResourceSpans{
-		Resource: &resource.Resource{
-			Attributes: []*common.KeyValue{},
-		},
-		ScopeSpans: []*tracepb.ScopeSpans{
-			{
-				Scope: &common.InstrumentationScope{},
-				Spans: []*tracepb.Span{},
-			},
-		},
-	}
+	// Group spans by service_name
+	// Each service gets its own ResourceSpans in OTLP
+	serviceSpans := make(map[string][]*tracepb.Span)
 
 	// Convert each row to a span
 	for _, row := range result.Rows {
@@ -1187,29 +1197,47 @@ func (s *Server) transformToOTLPProtobuf(result QueryResult) *collectortrace.Exp
 			spanData[col] = row[i]
 		}
 
+		// Extract service name
+		serviceName := "unknown"
+		if svc, ok := spanData["service_name"].(string); ok && svc != "" {
+			serviceName = svc
+		}
+
 		// Build OTLP span
 		span := s.buildOTLPSpan(spanData)
 		if span != nil {
-			resourceSpans.ScopeSpans[0].Spans = append(resourceSpans.ScopeSpans[0].Spans, span)
-		}
-
-		// Extract resource attributes (from first span)
-		if len(resourceSpans.Resource.Attributes) == 0 {
-			if serviceName, ok := spanData["service_name"].(string); ok && serviceName != "" {
-				resourceSpans.Resource.Attributes = append(resourceSpans.Resource.Attributes, &common.KeyValue{
-					Key: "service.name",
-					Value: &common.AnyValue{
-						Value: &common.AnyValue_StringValue{
-							StringValue: serviceName,
-						},
-					},
-				})
-			}
+			serviceSpans[serviceName] = append(serviceSpans[serviceName], span)
 		}
 	}
 
+	// Build ResourceSpans - one per service
+	resourceSpansList := make([]*tracepb.ResourceSpans, 0, len(serviceSpans))
+	for serviceName, spans := range serviceSpans {
+		resourceSpan := &tracepb.ResourceSpans{
+			Resource: &resource.Resource{
+				Attributes: []*common.KeyValue{
+					{
+						Key: "service.name",
+						Value: &common.AnyValue{
+							Value: &common.AnyValue_StringValue{
+								StringValue: serviceName,
+							},
+						},
+					},
+				},
+			},
+			ScopeSpans: []*tracepb.ScopeSpans{
+				{
+					Scope: &common.InstrumentationScope{},
+					Spans: spans,
+				},
+			},
+		}
+		resourceSpansList = append(resourceSpansList, resourceSpan)
+	}
+
 	return &collectortrace.ExportTraceServiceRequest{
-		ResourceSpans: []*tracepb.ResourceSpans{resourceSpans},
+		ResourceSpans: resourceSpansList,
 	}
 }
 
@@ -1376,6 +1404,38 @@ func (s *Server) buildOTLPSpan(spanData map[string]interface{}) *tracepb.Span {
 	return span
 }
 
+// spanKindToInt converts OTLP string span kind to integer enum
+// Per https://github.com/open-telemetry/opentelemetry-proto/blob/v1.5.0/opentelemetry/proto/trace/v1/trace.proto#L152
+func spanKindToInt(kind string) int {
+	switch strings.ToUpper(kind) {
+	case "INTERNAL":
+		return 1
+	case "SERVER":
+		return 2
+	case "CLIENT":
+		return 3
+	case "PRODUCER":
+		return 4
+	case "CONSUMER":
+		return 5
+	default:
+		return 0 // UNSPECIFIED
+	}
+}
+
+// statusCodeToInt converts OTLP string status code to integer enum
+// Per https://github.com/open-telemetry/opentelemetry-proto/blob/v1.5.0/opentelemetry/proto/trace/v1/trace.proto#L303
+func statusCodeToInt(code string) int {
+	switch strings.ToUpper(code) {
+	case "OK":
+		return 1
+	case "ERROR":
+		return 2
+	default:
+		return 0 // UNSET
+	}
+}
+
 // buildTempoTraceSpan builds a Tempo span from Pinot row data
 func (s *Server) buildTempoTraceSpan(spanData map[string]interface{}) TempoTraceSpan {
 	span := TempoTraceSpan{
@@ -1397,11 +1457,12 @@ func (s *Server) buildTempoTraceSpan(spanData map[string]interface{}) TempoTrace
 		span.Name = val
 	}
 	if val, ok := spanData["kind"].(string); ok {
-		span.Kind = val
+		span.Kind = spanKindToInt(val)
 	}
 
 	// Timestamp and duration
 	// Pinot can return numeric values as different types, so we need to handle multiple cases
+	var startTimeNanos int64
 	if tsVal := spanData["timestamp"]; tsVal != nil {
 		var tsMillis int64
 		switch v := tsVal.(type) {
@@ -1418,11 +1479,12 @@ func (s *Server) buildTempoTraceSpan(spanData map[string]interface{}) TempoTrace
 		}
 		if tsMillis > 0 {
 			// Convert milliseconds to nanoseconds
-			nanos := tsMillis * 1000000
-			span.StartTimeUnixNano = fmt.Sprintf("%d", nanos)
+			startTimeNanos = tsMillis * 1000000
+			span.StartTimeUnixNano = fmt.Sprintf("%d", startTimeNanos)
 		}
 	}
 
+	// Duration and end time calculation
 	if durationVal := spanData["duration"]; durationVal != nil {
 		var durationNanos int64
 		switch v := durationVal.(type) {
@@ -1439,12 +1501,18 @@ func (s *Server) buildTempoTraceSpan(spanData map[string]interface{}) TempoTrace
 		}
 		if durationNanos > 0 {
 			span.DurationNanos = fmt.Sprintf("%d", durationNanos)
+
+			// Calculate end time (required by OTLP)
+			if startTimeNanos > 0 {
+				endTimeNanos := startTimeNanos + durationNanos
+				span.EndTimeUnixNano = fmt.Sprintf("%d", endTimeNanos)
+			}
 		}
 	}
 
 	// Status
 	if statusCode, ok := spanData["status_code"].(string); ok && statusCode != "" {
-		span.Status.Code = statusCode
+		span.Status.Code = statusCodeToInt(statusCode)
 	}
 	if statusMsg, ok := spanData["status_message"].(string); ok && statusMsg != "" {
 		span.Status.Message = statusMsg
@@ -1462,10 +1530,15 @@ func (s *Server) buildTempoTraceSpan(spanData map[string]interface{}) TempoTrace
 	return span
 }
 
+// isValidAttributeValue checks if a value should be included as an attribute
+func isValidAttributeValue(val string) bool {
+	return val != "" && val != "null"
+}
+
 // addNativeColumnAttributes adds attributes from native Pinot columns
 func (s *Server) addNativeColumnAttributes(span *TempoTraceSpan, spanData map[string]interface{}) {
 	// HTTP attributes
-	if val, ok := spanData["http_method"].(string); ok && val != "" {
+	if val, ok := spanData["http_method"].(string); ok && isValidAttributeValue(val) {
 		span.Attributes = append(span.Attributes, TempoAttribute{
 			Key:   "http.method",
 			Value: stringValue(val),
@@ -1477,13 +1550,13 @@ func (s *Server) addNativeColumnAttributes(span *TempoTraceSpan, spanData map[st
 			Value: intValueFromInt(val),
 		})
 	}
-	if val, ok := spanData["http_route"].(string); ok && val != "" {
+	if val, ok := spanData["http_route"].(string); ok && isValidAttributeValue(val) {
 		span.Attributes = append(span.Attributes, TempoAttribute{
 			Key:   "http.route",
 			Value: stringValue(val),
 		})
 	}
-	if val, ok := spanData["http_target"].(string); ok && val != "" {
+	if val, ok := spanData["http_target"].(string); ok && isValidAttributeValue(val) {
 		span.Attributes = append(span.Attributes, TempoAttribute{
 			Key:   "http.target",
 			Value: stringValue(val),
@@ -1491,13 +1564,13 @@ func (s *Server) addNativeColumnAttributes(span *TempoTraceSpan, spanData map[st
 	}
 
 	// DB attributes
-	if val, ok := spanData["db_system"].(string); ok && val != "" {
+	if val, ok := spanData["db_system"].(string); ok && isValidAttributeValue(val) {
 		span.Attributes = append(span.Attributes, TempoAttribute{
 			Key:   "db.system",
 			Value: stringValue(val),
 		})
 	}
-	if val, ok := spanData["db_statement"].(string); ok && val != "" {
+	if val, ok := spanData["db_statement"].(string); ok && isValidAttributeValue(val) {
 		span.Attributes = append(span.Attributes, TempoAttribute{
 			Key:   "db.statement",
 			Value: stringValue(val),
@@ -1505,13 +1578,13 @@ func (s *Server) addNativeColumnAttributes(span *TempoTraceSpan, spanData map[st
 	}
 
 	// Messaging attributes
-	if val, ok := spanData["messaging_system"].(string); ok && val != "" {
+	if val, ok := spanData["messaging_system"].(string); ok && isValidAttributeValue(val) {
 		span.Attributes = append(span.Attributes, TempoAttribute{
 			Key:   "messaging.system",
 			Value: stringValue(val),
 		})
 	}
-	if val, ok := spanData["messaging_destination"].(string); ok && val != "" {
+	if val, ok := spanData["messaging_destination"].(string); ok && isValidAttributeValue(val) {
 		span.Attributes = append(span.Attributes, TempoAttribute{
 			Key:   "messaging.destination",
 			Value: stringValue(val),
@@ -1519,13 +1592,13 @@ func (s *Server) addNativeColumnAttributes(span *TempoTraceSpan, spanData map[st
 	}
 
 	// RPC attributes
-	if val, ok := spanData["rpc_service"].(string); ok && val != "" {
+	if val, ok := spanData["rpc_service"].(string); ok && isValidAttributeValue(val) {
 		span.Attributes = append(span.Attributes, TempoAttribute{
 			Key:   "rpc.service",
 			Value: stringValue(val),
 		})
 	}
-	if val, ok := spanData["rpc_method"].(string); ok && val != "" {
+	if val, ok := spanData["rpc_method"].(string); ok && isValidAttributeValue(val) {
 		span.Attributes = append(span.Attributes, TempoAttribute{
 			Key:   "rpc.method",
 			Value: stringValue(val),

@@ -42,6 +42,14 @@ type QueryStats struct {
 	TimeUsedMs     int64 `json:"timeUsedMs"`
 }
 
+// SessionState holds interactive session state
+type SessionState struct {
+	lastResponse   *QueryResponse // Last query results
+	lastQuery      string          // Last query string
+	focusedTraceID string          // Currently focused trace ID
+	focusedSpanID  string          // Currently focused span ID (for span-level focus)
+}
+
 func main() {
 	// Define flags
 	endpoint := flag.String("endpoint", "http://localhost:8080", "OTEL-OQL query API endpoint")
@@ -97,12 +105,16 @@ func main() {
 func runInteractiveMode(endpoint, tenantID string, verbose, jsonOutput, allFields bool) {
 	fmt.Fprintf(os.Stderr, "OQL Interactive Shell\n")
 	fmt.Fprintf(os.Stderr, "  Type 'help' for query examples\n")
+	fmt.Fprintf(os.Stderr, "  Type 'print #N' to show details of row N\n")
+	fmt.Fprintf(os.Stderr, "  Type 'focus #N' to focus on a trace or span\n")
+	fmt.Fprintf(os.Stderr, "  Type 'unfocus' to return to previous view\n")
 	fmt.Fprintf(os.Stderr, "  Type 'list metrics' to see available metrics\n")
 	fmt.Fprintf(os.Stderr, "  Type 'undo' to remove last refinement\n")
 	fmt.Fprintf(os.Stderr, "  Type 'exit' or Ctrl+D to quit\n\n")
 
 	scanner := bufio.NewScanner(os.Stdin)
 	var queryHistory []string // Stack of queries for undo
+	session := &SessionState{} // Session state for interactive commands
 
 	for {
 		fmt.Fprintf(os.Stderr, "oql> ")
@@ -138,6 +150,40 @@ func runInteractiveMode(endpoint, tenantID string, verbose, jsonOutput, allField
 			continue
 		}
 
+		// Check for print command (with or without arguments)
+		lowerInput := strings.ToLower(input)
+		if lowerInput == "print" || strings.HasPrefix(lowerInput, "print ") {
+			handlePrintCommand(session, input, allFields)
+			continue
+		}
+
+		// Check for focus command
+		if strings.HasPrefix(strings.ToLower(input), "focus ") {
+			handleFocusCommand(session, input)
+			continue
+		}
+
+		// Check for unfocus command
+		if strings.ToLower(input) == "unfocus" || strings.ToLower(input) == "clear" {
+			if session.focusedTraceID == "" && session.focusedSpanID == "" {
+				fmt.Fprintf(os.Stderr, "No trace or span is currently focused.\n\n")
+				continue
+			}
+			if session.focusedSpanID != "" {
+				fmt.Fprintf(os.Stderr, "✓ Cleared focus on span: %s\n", session.focusedSpanID)
+			} else {
+				fmt.Fprintf(os.Stderr, "✓ Cleared focus on trace: %s\n", session.focusedTraceID)
+			}
+			session.focusedTraceID = ""
+			session.focusedSpanID = ""
+			// Re-display last query results
+			if session.lastResponse != nil {
+				printResultsNumbered(session.lastResponse, session.lastQuery, verbose, allFields)
+			}
+			fmt.Fprintf(os.Stderr, "\n")
+			continue
+		}
+
 		// Check for undo command
 		if strings.ToLower(input) == "undo" || strings.ToLower(input) == "back" {
 			if len(queryHistory) <= 1 {
@@ -165,6 +211,8 @@ func runInteractiveMode(endpoint, tenantID string, verbose, jsonOutput, allField
 			} else {
 				printResults(resp, lastQuery, verbose, allFields)
 			}
+			session.lastResponse = resp
+			session.lastQuery = lastQuery
 			fmt.Fprintf(os.Stderr, "\n")
 			continue
 		}
@@ -173,11 +221,21 @@ func runInteractiveMode(endpoint, tenantID string, verbose, jsonOutput, allField
 		query := input
 		isRefinement := isRefinementOperation(input)
 
+		// Auto-expand abbreviations (may convert to a full query if focused)
+		expandedQuery, isFullQuery := expandAbbreviations(query, session)
+		query = expandedQuery
+
+		// If expandAbbreviations returned a full query (e.g., focused trace expansion),
+		// treat it as a new base query, not a refinement
+		if isFullQuery {
+			isRefinement = false
+		}
+
 		// Also check if it's a bare condition (auto-add filter)
-		if !isRefinement && !strings.HasPrefix(strings.ToLower(input), "signal=") {
-			if looksLikeCondition(input) {
+		if !isRefinement && !isFullQuery && !strings.HasPrefix(strings.ToLower(query), "signal=") {
+			if looksLikeCondition(query) {
 				// Auto-add filter prefix
-				input = "filter " + input
+				query = "filter " + query
 				isRefinement = true
 				fmt.Fprintf(os.Stderr, "(auto-adding 'filter' prefix)\n")
 			}
@@ -190,7 +248,7 @@ func runInteractiveMode(endpoint, tenantID string, verbose, jsonOutput, allField
 			}
 			// Append refinement to last query
 			lastQuery := queryHistory[len(queryHistory)-1]
-			query = lastQuery + " | " + input
+			query = lastQuery + " | " + query
 			fmt.Fprintf(os.Stderr, "→ %s\n", query)
 		}
 
@@ -216,6 +274,10 @@ func runInteractiveMode(endpoint, tenantID string, verbose, jsonOutput, allField
 			queryHistory = append(queryHistory, query)
 		}
 
+		// Save results to session
+		session.lastResponse = resp
+		session.lastQuery = query
+
 		// Output results
 		if jsonOutput {
 			jsonBytes, err := json.MarshalIndent(resp, "", "  ")
@@ -225,7 +287,7 @@ func runInteractiveMode(endpoint, tenantID string, verbose, jsonOutput, allField
 			}
 			fmt.Println(string(jsonBytes))
 		} else {
-			printResults(resp, query, verbose, allFields)
+			printResultsNumbered(resp, query, verbose, allFields)
 		}
 
 		fmt.Fprintf(os.Stderr, "\n") // Add spacing between queries
@@ -247,6 +309,8 @@ func isRefinementOperation(input string) bool {
 		"filter ",
 		"limit ",
 		"expand ",
+		"et ", // Abbreviation for "expand trace"
+		"et",  // Standalone "et"
 		"correlate ",
 		"get_exemplars",
 		"switch_context ",
@@ -423,6 +487,21 @@ DISCOVERY COMMANDS:
   list labels                    List all available labels
   list values <label>            List values for a specific label
 
+INTERACTIVE COMMANDS:
+  print #N                       Show full details of row N from last results
+  print <traceid>                Show rows matching trace ID (supports prefix)
+  print                          Show details of focused trace/span (when focused)
+  focus #N                       Set focus to trace/span in row N
+  focus <traceid>                Set context trace for subsequent operations
+  unfocus                        Clear focus and return to list view
+  undo                           Remove last refinement
+
+FOCUS MODES:
+  Trace-level focus              From trace list: 'focus #N' focuses on entire trace
+                                 Commands: 'print', 'et' (expand trace)
+  Span-level focus               From expanded trace: 'focus #N' focuses on specific span
+                                 Commands: 'print', 'correlate logs' (logs for this span)
+
 BASIC SYNTAX:
   signal=<type> [operations...]
 
@@ -434,7 +513,7 @@ SIGNAL TYPES:
 COMMON OPERATIONS:
   where <condition>              Filter by condition
   limit <n>                      Limit results to n rows
-  expand trace                   Get all spans in the same trace
+  expand trace                   Get all spans in the same trace (or just: expand, et)
   correlate <signals>            Find related logs/metrics/spans
   get_exemplars()                Extract trace IDs from metrics
   since <duration>               Time range (e.g., "1h", "30m")
@@ -477,11 +556,23 @@ EXAMPLES:
   # Aggregate query
   signal=spans group by service_name | aggregate avg(duration)
 
+  # Interactive workflow - investigate a specific trace
+  signal=t | filter name="GET /tea"  # Get list of traces
+  focus #3                            # Focus on trace from row 3
+  print                               # Show details (no args needed when focused!)
+  et                                  # Expand the focused trace (super short!)
+  focus #5                            # Focus on span #5 (error span!)
+  print                               # Show span details
+  correlate logs                      # Get logs for THIS SPECIFIC SPAN
+  unfocus                             # Return to trace view
+
 TIPS:
   - Both = and == work for equality
   - Strings need quotes: service_name = "payment"
   - Time units: duration > 5s, duration < 100ms (auto-converts to ns)
   - Supported units: s (seconds), ms (milliseconds), us (microseconds), ns (nanoseconds)
+  - Abbreviations: 'expand' or 'et' instead of 'expand trace'
+  - Interactive: Use 'print #N' to inspect rows, 'focus <traceid>' to set context
   - In REPL: type 'undo' to remove last refinement
   - Type 'exit' or Ctrl+D to quit interactive mode
 `
@@ -692,6 +783,509 @@ func fetchLabelValues(endpoint, tenantID, labelName string, limit int) ([]string
 	}
 
 	return valuesResp.Data, nil
+}
+
+// handlePrintCommand handles "print #N" or "print <traceid>" or "print" (when focused) commands
+func handlePrintCommand(session *SessionState, input string, allFields bool) {
+	if session.lastResponse == nil || len(session.lastResponse.Results) == 0 {
+		fmt.Fprintf(os.Stderr, "No previous results. Run a query first.\n\n")
+		return
+	}
+
+	parts := strings.Fields(input)
+
+	// Handle "print" without arguments when focused
+	if len(parts) == 1 {
+		if session.focusedSpanID != "" {
+			// Span-level focus: print the specific span
+			printRowBySpanID(session.lastResponse, session.focusedSpanID, allFields)
+			return
+		} else if session.focusedTraceID != "" {
+			// Trace-level focus: print the trace
+			printRowByTraceID(session.lastResponse, session.focusedTraceID, allFields)
+			return
+		} else {
+			fmt.Fprintf(os.Stderr, "Usage: print #N (row number) or print <traceid>\n")
+			fmt.Fprintf(os.Stderr, "Example: print #3\n")
+			fmt.Fprintf(os.Stderr, "Example: print 0c7c63b1\n")
+			fmt.Fprintf(os.Stderr, "Tip: Use 'focus #N' to focus on a trace/span, then 'print' to see its details\n\n")
+			return
+		}
+	}
+
+	arg := parts[1]
+
+	// Check if it's a row number (#N)
+	if strings.HasPrefix(arg, "#") {
+		rowNum, err := strconv.Atoi(arg[1:])
+		if err != nil || rowNum < 1 {
+			fmt.Fprintf(os.Stderr, "Invalid row number: %s\n\n", arg)
+			return
+		}
+		printRowDetails(session.lastResponse, rowNum-1, allFields)
+		return
+	}
+
+	// Otherwise treat as trace ID (or prefix)
+	printRowByTraceID(session.lastResponse, arg, allFields)
+}
+
+// handleFocusCommand handles "focus <traceid>" or "focus on trace <traceid>" or "focus #N" commands
+func handleFocusCommand(session *SessionState, input string) {
+	if session.lastResponse == nil || len(session.lastResponse.Results) == 0 {
+		fmt.Fprintf(os.Stderr, "No previous results. Run a query first.\n\n")
+		return
+	}
+
+	parts := strings.Fields(input)
+
+	// Handle "focus on trace <id>" or "focus <id>" or "focus #N"
+	var arg string
+	if len(parts) >= 4 && strings.ToLower(parts[1]) == "on" && strings.ToLower(parts[2]) == "trace" {
+		arg = parts[3]
+	} else if len(parts) >= 2 {
+		arg = parts[1]
+	} else {
+		fmt.Fprintf(os.Stderr, "Usage: focus #N (row number) or focus <traceid>\n")
+		fmt.Fprintf(os.Stderr, "Example: focus #3\n")
+		fmt.Fprintf(os.Stderr, "Example: focus 0c7c63b1\n")
+		fmt.Fprintf(os.Stderr, "Example: focus on trace 0c7c63b13f9bcbfc\n\n")
+		return
+	}
+
+	var traceID string
+	var spanID string
+
+	// Check if it's a row number (#N)
+	if strings.HasPrefix(arg, "#") {
+		rowNum, err := strconv.Atoi(arg[1:])
+		if err != nil || rowNum < 1 {
+			fmt.Fprintf(os.Stderr, "Invalid row number: %s\n\n", arg)
+			return
+		}
+
+		// Extract trace_id and span_id from row
+		result := session.lastResponse.Results[0]
+		if rowNum-1 >= len(result.Rows) {
+			fmt.Fprintf(os.Stderr, "Row #%d not found. Results contain %d rows.\n\n", rowNum, len(result.Rows))
+			return
+		}
+
+		// Find trace_id and span_id column indices
+		traceIDIdx := -1
+		spanIDIdx := -1
+		for i, col := range result.Columns {
+			if col == "trace_id" {
+				traceIDIdx = i
+			} else if col == "span_id" {
+				spanIDIdx = i
+			}
+		}
+
+		if traceIDIdx == -1 {
+			fmt.Fprintf(os.Stderr, "No trace_id column in results.\n\n")
+			return
+		}
+
+		row := result.Rows[rowNum-1]
+		if traceIDIdx < len(row) && row[traceIDIdx] != nil {
+			traceID = fmt.Sprintf("%v", row[traceIDIdx])
+		} else {
+			fmt.Fprintf(os.Stderr, "Row #%d has no trace_id.\n\n", rowNum)
+			return
+		}
+
+		// If span_id column exists, extract it (span-level focus)
+		if spanIDIdx != -1 && spanIDIdx < len(row) && row[spanIDIdx] != nil {
+			spanID = fmt.Sprintf("%v", row[spanIDIdx])
+		}
+	} else {
+		// It's a trace ID (or prefix)
+		traceID = arg
+	}
+
+	// Determine focus type based on context
+	isExpandTraceView := strings.Contains(strings.ToLower(session.lastQuery), "expand trace")
+
+	if isExpandTraceView && spanID != "" {
+		// Span-level focus (when in expand trace view)
+		session.focusedTraceID = traceID
+		session.focusedSpanID = spanID
+		fmt.Fprintf(os.Stderr, "✓ Focused on span: %s (trace: %s)\n", spanID, traceID)
+		fmt.Fprintf(os.Stderr, "  Commands: 'print' (span details), 'correlate logs' (logs for this span), 'unfocus'\n\n")
+	} else {
+		// Trace-level focus
+		session.focusedTraceID = traceID
+		session.focusedSpanID = "" // Clear span focus
+		fmt.Fprintf(os.Stderr, "✓ Focused on trace: %s\n", traceID)
+		fmt.Fprintf(os.Stderr, "  Commands: 'print' (details), 'et' (expand), 'unfocus' (return to list)\n\n")
+	}
+}
+
+// expandAbbreviations expands shorthand commands
+// Returns (expandedQuery, isFullQuery) where isFullQuery=true means it generated a complete signal=... query
+func expandAbbreviations(query string, session *SessionState) (string, bool) {
+	trimmed := strings.TrimSpace(query)
+	lowerQuery := strings.ToLower(trimmed)
+
+	// Expand "et" to "expand trace"
+	if lowerQuery == "et" {
+		query = "expand trace"
+	} else if strings.HasPrefix(lowerQuery, "et ") {
+		query = "expand trace" + trimmed[2:]
+	}
+
+	// Expand standalone "expand" to "expand trace"
+	if lowerQuery == "expand" {
+		query = "expand trace"
+	} else if strings.HasPrefix(lowerQuery, "expand ") && !strings.HasPrefix(lowerQuery, "expand trace") {
+		// It's "expand" followed by something that's not "trace"
+		// This is likely a typo, so just convert "expand" -> "expand trace"
+		parts := strings.Fields(trimmed)
+		if len(parts) == 1 {
+			query = "expand trace"
+		}
+	}
+
+	// Update lowerQuery after expansions
+	lowerQuery = strings.ToLower(query)
+
+	// If focused on a span and user types "correlate logs", auto-inject span_id filter
+	if session.focusedSpanID != "" {
+		if lowerQuery == "correlate logs" || lowerQuery == "correlate log" {
+			// Find logs for this specific span
+			query = fmt.Sprintf("signal=logs | where span_id == \"%s\"", session.focusedSpanID)
+			fmt.Fprintf(os.Stderr, "(finding logs for focused span: %s)\n", session.focusedSpanID)
+			return query, true // This is a full query
+		}
+	}
+
+	// If focused on a trace and user types "expand" or "expand trace" without specifying trace_id,
+	// auto-inject the focused trace as a FULL NEW QUERY
+	if session.focusedTraceID != "" && session.focusedSpanID == "" {
+		if lowerQuery == "expand trace" || lowerQuery == "expand" || lowerQuery == "et" {
+			// Auto-inject focused trace as a complete new query
+			query = fmt.Sprintf("signal=spans | where trace_id == \"%s\" | expand trace", session.focusedTraceID)
+			fmt.Fprintf(os.Stderr, "(expanding focused trace: %s)\n", session.focusedTraceID)
+			return query, true // This is a full query, not a refinement
+		}
+	}
+
+	return query, false // Normal expansion, not a full query
+}
+
+// printRowDetails prints full details of a specific row
+func printRowDetails(resp *QueryResponse, rowIdx int, allFields bool) {
+	if len(resp.Results) == 0 {
+		fmt.Fprintf(os.Stderr, "No results to display.\n\n")
+		return
+	}
+
+	// For now, print from first result set
+	result := resp.Results[0]
+
+	if rowIdx < 0 || rowIdx >= len(result.Rows) {
+		fmt.Fprintf(os.Stderr, "Row #%d not found. Results contain %d rows.\n\n", rowIdx+1, len(result.Rows))
+		return
+	}
+
+	row := result.Rows[rowIdx]
+
+	fmt.Printf("\n=== Row #%d Details ===\n\n", rowIdx+1)
+
+	// Find max column name length for alignment
+	maxLen := 0
+	for _, col := range result.Columns {
+		if len(col) > maxLen {
+			maxLen = len(col)
+		}
+	}
+
+	// Print all fields (with FULL values, not truncated)
+	for i, col := range result.Columns {
+		if i < len(row) {
+			value := row[i]
+			// For details view, show raw value without table truncation
+			var formattedValue string
+			if value == nil {
+				formattedValue = ""
+			} else {
+				// Apply formatting but not truncation
+				switch col {
+				case "duration":
+					if numVal, ok := toInt64(value); ok {
+						formattedValue = formatDuration(numVal)
+					} else {
+						formattedValue = fmt.Sprintf("%v", value)
+					}
+				case "timestamp", "start_time", "end_time":
+					if numVal, ok := toInt64(value); ok {
+						formattedValue = formatTimestamp(numVal)
+					} else {
+						formattedValue = fmt.Sprintf("%v", value)
+					}
+				case "http_status_code", "status_code":
+					if numVal, ok := toInt64(value); ok && numVal == -1 {
+						formattedValue = ""
+					} else {
+						formattedValue = fmt.Sprintf("%v", value)
+					}
+				case "error":
+					if boolVal, ok := value.(bool); ok {
+						if boolVal {
+							formattedValue = "true"
+						} else {
+							formattedValue = ""
+						}
+					} else {
+						formattedValue = fmt.Sprintf("%v", value)
+					}
+				default:
+					// Show full value (no truncation for trace_id, span_id, etc.)
+					formattedValue = fmt.Sprintf("%v", value)
+				}
+			}
+
+			if formattedValue == "" && !allFields {
+				continue // Skip empty values unless --all-fields
+			}
+			fmt.Printf("%-*s: %s\n", maxLen, col, formattedValue)
+		}
+	}
+
+	fmt.Println()
+}
+
+// printRowByTraceID finds and prints row(s) matching a trace ID (or prefix)
+func printRowByTraceID(resp *QueryResponse, traceIDPrefix string, allFields bool) {
+	if len(resp.Results) == 0 {
+		fmt.Fprintf(os.Stderr, "No results to display.\n\n")
+		return
+	}
+
+	result := resp.Results[0]
+
+	// Find trace_id column
+	traceIDIdx := -1
+	for i, col := range result.Columns {
+		if col == "trace_id" {
+			traceIDIdx = i
+			break
+		}
+	}
+
+	if traceIDIdx == -1 {
+		fmt.Fprintf(os.Stderr, "No trace_id column in results.\n\n")
+		return
+	}
+
+	// Find matching rows
+	matchedRows := make([]int, 0)
+	for rowIdx, row := range result.Rows {
+		if traceIDIdx < len(row) && row[traceIDIdx] != nil {
+			traceID := fmt.Sprintf("%v", row[traceIDIdx])
+			if strings.HasPrefix(traceID, traceIDPrefix) {
+				matchedRows = append(matchedRows, rowIdx)
+			}
+		}
+	}
+
+	if len(matchedRows) == 0 {
+		fmt.Fprintf(os.Stderr, "No rows found with trace_id starting with: %s\n\n", traceIDPrefix)
+		return
+	}
+
+	// Print all matching rows
+	for _, rowIdx := range matchedRows {
+		printRowDetails(resp, rowIdx, allFields)
+	}
+}
+
+// printRowBySpanID finds and prints row(s) matching a span ID (or prefix)
+func printRowBySpanID(resp *QueryResponse, spanIDPrefix string, allFields bool) {
+	if len(resp.Results) == 0 {
+		fmt.Fprintf(os.Stderr, "No results to display.\n\n")
+		return
+	}
+
+	result := resp.Results[0]
+
+	// Find span_id column
+	spanIDIdx := -1
+	for i, col := range result.Columns {
+		if col == "span_id" {
+			spanIDIdx = i
+			break
+		}
+	}
+
+	if spanIDIdx == -1 {
+		fmt.Fprintf(os.Stderr, "No span_id column in results.\n\n")
+		return
+	}
+
+	// Find matching rows
+	matchedRows := make([]int, 0)
+	for rowIdx, row := range result.Rows {
+		if spanIDIdx < len(row) && row[spanIDIdx] != nil {
+			spanID := fmt.Sprintf("%v", row[spanIDIdx])
+			if strings.HasPrefix(spanID, spanIDPrefix) {
+				matchedRows = append(matchedRows, rowIdx)
+			}
+		}
+	}
+
+	if len(matchedRows) == 0 {
+		fmt.Fprintf(os.Stderr, "No rows found with span_id starting with: %s\n\n", spanIDPrefix)
+		return
+	}
+
+	// Print all matching rows
+	for _, rowIdx := range matchedRows {
+		printRowDetails(resp, rowIdx, allFields)
+	}
+}
+
+// printResultsNumbered prints query results with row numbers
+func printResultsNumbered(resp *QueryResponse, query string, verbose, allFields bool) {
+	if len(resp.Results) == 0 {
+		fmt.Println("No results")
+		return
+	}
+
+	// Detect query context
+	isCorrelateQuery := strings.Contains(strings.ToLower(query), "correlate")
+	isExpandTrace := strings.Contains(strings.ToLower(query), "expand trace")
+	signalType := detectSignalType(query)
+
+	for i, result := range resp.Results {
+		if len(resp.Results) > 1 {
+			if isCorrelateQuery {
+				// For correlate queries, show signal type header
+				fmt.Printf("\n=== %s ===\n", detectSignalTypeFromSQL(result.SQL))
+			} else {
+				fmt.Printf("\n=== Result Set %d ===\n", i+1)
+			}
+		}
+
+		if verbose {
+			fmt.Printf("\nSQL: %s\n", result.SQL)
+			fmt.Printf("Stats: %d/%d docs scanned, %dms\n\n",
+				result.Stats.NumDocsScanned,
+				result.Stats.TotalDocs,
+				result.Stats.TimeUsedMs)
+		}
+
+		if len(result.Rows) == 0 {
+			fmt.Println("No rows returned")
+			continue
+		}
+
+		// Sort rows by trace hierarchy if this is an expand trace query
+		displayRows := result.Rows
+		if isExpandTrace {
+			displayRows = sortRowsByTraceHierarchy(result.Columns, result.Rows)
+		}
+
+		// Filter columns unless --all-fields is specified
+		displayColumns := result.Columns
+		columnIndices := make([]int, len(result.Columns))
+		for i := range columnIndices {
+			columnIndices[i] = i
+		}
+		var hiddenFilters map[string]string
+
+		if !allFields {
+			displayColumns, columnIndices, hiddenFilters = filterColumns(result.Columns, signalType, displayRows, query)
+		}
+
+		if len(displayColumns) == 0 {
+			fmt.Println("No displayable columns")
+			continue
+		}
+
+		// Print filter summary if we hid any filtered columns
+		if len(hiddenFilters) > 0 {
+			filterParts := make([]string, 0)
+			for field, value := range hiddenFilters {
+				filterParts = append(filterParts, fmt.Sprintf("%s=%s", field, value))
+			}
+			fmt.Printf("[Filtered by: %s]\n", strings.Join(filterParts, ", "))
+		}
+
+		// Print table header with row number column
+		printTableHeaderNumbered(displayColumns)
+
+		// Build indentation map for expand trace queries (after sorting!)
+		indentMap := make(map[int]int) // row index -> indent level
+		if isExpandTrace {
+			indentMap = buildTraceIndentation(result.Columns, displayRows)
+		}
+
+		// Print table rows with row numbers
+		for rowIdx, row := range displayRows {
+			indent := indentMap[rowIdx]
+			printFormattedRowNumbered(rowIdx+1, displayColumns, row, columnIndices, indent)
+		}
+
+		fmt.Printf("\n%d row(s) returned\n", len(displayRows))
+		fmt.Fprintf(os.Stderr, "Tip: Use 'print #N' to see full details (IDs shown truncated)\n")
+	}
+}
+
+// printTableHeaderNumbered prints table header with row number column
+func printTableHeaderNumbered(columns []string) {
+	widths := getColumnWidths(columns)
+
+	// Print #
+	fmt.Printf("%-4s", "#")
+
+	// Print header with display names
+	for i, col := range columns {
+		displayName := getDisplayColumnName(col)
+		fmt.Printf("%-*s", widths[i]+2, displayName)
+	}
+	fmt.Println()
+
+	// Print separator
+	fmt.Print("----") // For row number
+	for _, width := range widths {
+		fmt.Print(strings.Repeat("-", width+2))
+	}
+	fmt.Println()
+}
+
+// printFormattedRowNumbered prints a row with row number prefix
+func printFormattedRowNumbered(rowNum int, columns []string, row []interface{}, indices []int, indent int) {
+	widths := getColumnWidths(columns)
+
+	// Print row number
+	fmt.Printf("%-4d", rowNum)
+
+	for i, idx := range indices {
+		if idx >= len(row) {
+			fmt.Printf("%-*s", widths[i]+2, "N/A")
+			continue
+		}
+
+		// Format the value
+		strVal := formatValue(columns[i], row[idx])
+
+		// Add indentation to the "name" column for trace hierarchy
+		if columns[i] == "name" && indent > 0 {
+			// Use tree characters for better visibility
+			indentStr := strings.Repeat("  ", indent-1) + "└─"
+			strVal = indentStr + strVal
+		}
+
+		// Truncate long values
+		if len(strVal) > widths[i] {
+			strVal = strVal[:widths[i]-3] + "..."
+		}
+
+		fmt.Printf("%-*s", widths[i]+2, strVal)
+	}
+	fmt.Println()
 }
 
 // executeQuery sends the query to the OTEL-OQL API
@@ -909,6 +1503,8 @@ func extractFilteredFields(query string) map[string]string {
 
 // filterColumns returns the columns to display based on signal type and actual data content
 func filterColumns(allColumns []string, signalType string, rows [][]interface{}, query string) ([]string, []int, map[string]string) {
+	isExpandTrace := strings.Contains(strings.ToLower(query), "expand trace")
+
 	// Get potentially interesting columns for this signal type
 	potentialColumns := getPotentiallyInterestingColumns(signalType, query)
 
@@ -936,12 +1532,14 @@ func filterColumns(allColumns []string, signalType string, rows [][]interface{},
 		hasData := false
 		var firstNonNullValue interface{}
 		allIdentical := true
+		nonNullCount := 0
 
 		for _, row := range rows {
 			if i < len(row) && row[i] != nil {
 				val := fmt.Sprintf("%v", row[i])
 				if val != "" && val != "null" {
 					hasData = true
+					nonNullCount++
 					if firstNonNullValue == nil {
 						firstNonNullValue = row[i]
 					} else if fmt.Sprintf("%v", firstNonNullValue) != val {
@@ -954,6 +1552,14 @@ func filterColumns(allColumns []string, signalType string, rows [][]interface{},
 		// Skip columns with no data
 		if !hasData {
 			continue
+		}
+
+		// For expand trace, hide columns that are mostly empty (less than 30% populated)
+		if isExpandTrace && len(rows) > 0 {
+			percentPopulated := float64(nonNullCount) / float64(len(rows)) * 100
+			if percentPopulated < 30 {
+				continue
+			}
 		}
 
 		// If user filtered on this field with equality and all values are identical, hide it
@@ -1037,6 +1643,22 @@ func formatValue(colName string, value interface{}) string {
 			return formatTimestamp(numVal)
 		}
 
+	case "trace_id", "parent_trace_id":
+		// Show shortened trace ID (first 12 chars) for table display
+		strVal := fmt.Sprintf("%v", value)
+		if len(strVal) > 12 {
+			return strVal[:12]
+		}
+		return strVal
+
+	case "span_id", "parent_span_id":
+		// Show shortened span ID (first 8 chars) for table display
+		strVal := fmt.Sprintf("%v", value)
+		if len(strVal) > 8 {
+			return strVal[:8]
+		}
+		return strVal
+
 	case "http_status_code", "status_code":
 		// Don't show -1 (null placeholder)
 		if numVal, ok := toInt64(value); ok && numVal == -1 {
@@ -1079,6 +1701,137 @@ func toInt64(value interface{}) (int64, bool) {
 	default:
 		return 0, false
 	}
+}
+
+// sortRowsByTraceHierarchy sorts rows by parent-child relationships for waterfall display
+func sortRowsByTraceHierarchy(columns []string, rows [][]interface{}) [][]interface{} {
+	// Find span_id, parent_span_id, and timestamp column indices
+	spanIDIdx := -1
+	parentSpanIDIdx := -1
+	timestampIdx := -1
+	for i, col := range columns {
+		if col == "span_id" {
+			spanIDIdx = i
+		} else if col == "parent_span_id" {
+			parentSpanIDIdx = i
+		} else if col == "timestamp" {
+			timestampIdx = i
+		}
+	}
+
+	// If we don't have both columns, return original order
+	if spanIDIdx == -1 || parentSpanIDIdx == -1 {
+		return rows
+	}
+
+	// Build span_id -> row map
+	spanToRow := make(map[string][]interface{})
+	for _, row := range rows {
+		if spanIDIdx < len(row) && row[spanIDIdx] != nil {
+			spanID := fmt.Sprintf("%v", row[spanIDIdx])
+			spanToRow[spanID] = row
+		}
+	}
+
+	// Helper to extract timestamp from row
+	getTimestamp := func(spanID string) int64 {
+		if row, ok := spanToRow[spanID]; ok {
+			if timestampIdx != -1 && timestampIdx < len(row) && row[timestampIdx] != nil {
+				if ts, ok := toInt64(row[timestampIdx]); ok {
+					return ts
+				}
+			}
+		}
+		return 0
+	}
+
+	// Build parent -> children map
+	children := make(map[string][]string)
+	var roots []string
+
+	for _, row := range rows {
+		if spanIDIdx >= len(row) || row[spanIDIdx] == nil {
+			continue
+		}
+		spanID := fmt.Sprintf("%v", row[spanIDIdx])
+
+		// Check parent
+		var parentSpanID string
+		if parentSpanIDIdx < len(row) && row[parentSpanIDIdx] != nil {
+			parentSpanID = fmt.Sprintf("%v", row[parentSpanIDIdx])
+		}
+
+		// Empty or null parent means root span
+		if parentSpanID == "" || parentSpanID == "null" || parentSpanID == "0" || parentSpanID == "00000000000000000000000000000000" {
+			roots = append(roots, spanID)
+		} else {
+			children[parentSpanID] = append(children[parentSpanID], spanID)
+		}
+	}
+
+	// Sort roots by timestamp
+	if timestampIdx != -1 {
+		for i := 0; i < len(roots); i++ {
+			for j := i + 1; j < len(roots); j++ {
+				if getTimestamp(roots[i]) > getTimestamp(roots[j]) {
+					roots[i], roots[j] = roots[j], roots[i]
+				}
+			}
+		}
+	}
+
+	// Sort children by timestamp for each parent
+	if timestampIdx != -1 {
+		for parentID, childList := range children {
+			// Simple bubble sort by timestamp
+			sorted := make([]string, len(childList))
+			copy(sorted, childList)
+			for i := 0; i < len(sorted); i++ {
+				for j := i + 1; j < len(sorted); j++ {
+					if getTimestamp(sorted[i]) > getTimestamp(sorted[j]) {
+						sorted[i], sorted[j] = sorted[j], sorted[i]
+					}
+				}
+			}
+			children[parentID] = sorted
+		}
+	}
+
+	// DFS traversal to build sorted list
+	sortedRows := make([][]interface{}, 0, len(rows))
+	visited := make(map[string]bool)
+
+	var dfs func(spanID string)
+	dfs = func(spanID string) {
+		if visited[spanID] {
+			return
+		}
+		visited[spanID] = true
+
+		// Add this span
+		if row, ok := spanToRow[spanID]; ok {
+			sortedRows = append(sortedRows, row)
+		}
+
+		// Add children in timestamp order (already sorted)
+		for _, childID := range children[spanID] {
+			dfs(childID)
+		}
+	}
+
+	// Start from roots (already sorted by timestamp)
+	for _, rootID := range roots {
+		dfs(rootID)
+	}
+
+	// Add any orphaned spans that weren't reached
+	for spanID, row := range spanToRow {
+		if !visited[spanID] {
+			sortedRows = append(sortedRows, row)
+		}
+	}
+
+	return sortedRows
 }
 
 // buildTraceIndentation builds an indentation map for trace hierarchy
@@ -1124,7 +1877,7 @@ func buildTraceIndentation(columns []string, rows [][]interface{}) map[int]int {
 		}
 
 		parentSpanID := fmt.Sprintf("%v", row[parentSpanIDIdx])
-		if parentSpanID == "" || parentSpanID == "0" || parentSpanID == "00000000000000000000000000000000" {
+		if parentSpanID == "" || parentSpanID == "0" || parentSpanID == "null" || parentSpanID == "00000000000000000000000000000000" {
 			return 0 // Empty parent = root
 		}
 
@@ -1160,7 +1913,8 @@ func printFormattedRow(columns []string, row []interface{}, indices []int, inden
 
 		// Add indentation to the "name" column for trace hierarchy
 		if columns[i] == "name" && indent > 0 {
-			indentStr := strings.Repeat("  ", indent)
+			// Use tree characters for better visibility
+			indentStr := strings.Repeat("  ", indent-1) + "└─"
 			strVal = indentStr + strVal
 		}
 
@@ -1209,6 +1963,12 @@ func printResults(resp *QueryResponse, query string, verbose, allFields bool) {
 			continue
 		}
 
+		// Sort rows by trace hierarchy if this is an expand trace query
+		displayRows := result.Rows
+		if isExpandTrace {
+			displayRows = sortRowsByTraceHierarchy(result.Columns, result.Rows)
+		}
+
 		// Filter columns unless --all-fields is specified
 		displayColumns := result.Columns
 		columnIndices := make([]int, len(result.Columns))
@@ -1218,7 +1978,7 @@ func printResults(resp *QueryResponse, query string, verbose, allFields bool) {
 		var hiddenFilters map[string]string
 
 		if !allFields {
-			displayColumns, columnIndices, hiddenFilters = filterColumns(result.Columns, signalType, result.Rows, query)
+			displayColumns, columnIndices, hiddenFilters = filterColumns(result.Columns, signalType, displayRows, query)
 		}
 
 		if len(displayColumns) == 0 {
@@ -1238,19 +1998,19 @@ func printResults(resp *QueryResponse, query string, verbose, allFields bool) {
 		// Print table header
 		printTableHeader(displayColumns)
 
-		// Build indentation map for expand trace queries
+		// Build indentation map for expand trace queries (after sorting!)
 		indentMap := make(map[int]int) // row index -> indent level
 		if isExpandTrace {
-			indentMap = buildTraceIndentation(result.Columns, result.Rows)
+			indentMap = buildTraceIndentation(result.Columns, displayRows)
 		}
 
 		// Print table rows with formatting
-		for rowIdx, row := range result.Rows {
+		for rowIdx, row := range displayRows {
 			indent := indentMap[rowIdx]
 			printFormattedRow(displayColumns, row, columnIndices, indent)
 		}
 
-		fmt.Printf("\n%d row(s) returned\n", len(result.Rows))
+		fmt.Printf("\n%d row(s) returned\n", len(displayRows))
 	}
 }
 
@@ -1259,10 +2019,18 @@ func getDisplayColumnName(col string) string {
 	switch col {
 	case "http_status_code":
 		return "status"
+	case "http_method":
+		return "method"
+	case "http_route":
+		return "route"
+	case "service_name":
+		return "service"
 	case "severity_text":
 		return "severity"
 	case "severity_number":
 		return "sev_num"
+	case "parent_span_id":
+		return "parent"
 	default:
 		return col
 	}
@@ -1280,25 +2048,35 @@ func getColumnWidths(columns []string) []int {
 		minWidth := 10 // default minimum
 		switch col {
 		case "metric_name":
-			minWidth = 35 // Metric names can be long (e.g., "jvm.threads.daemon.count")
+			minWidth = 30 // Metric names can be long (e.g., "jvm.threads.daemon.count")
 		case "timestamp":
-			minWidth = 24 // Full timestamp: "2026-03-28T10:30:45.123Z"
-		case "trace_id":
-			minWidth = 32 // UUID-style trace IDs
+			minWidth = 19 // Timestamp: "2026-03-28 10:30:45"
+		case "trace_id", "parent_trace_id":
+			minWidth = 12 // Shortened trace IDs (first 12 chars)
 		case "span_id", "parent_span_id":
-			minWidth = 16 // Span IDs
+			minWidth = 8 // Shortened span IDs (first 8 chars)
 		case "name":
-			minWidth = 25 // Span/operation names
+			minWidth = 20 // Span/operation names
 		case "body":
-			minWidth = 50 // Log message bodies
-		case "service_name", "host_name":
-			minWidth = 20 // Service/host names
+			minWidth = 40 // Log message bodies
+		case "service_name":
+			minWidth = 15 // Service names
+		case "host_name":
+			minWidth = 12 // Host names
 		case "exemplar_trace_id":
-			minWidth = 32 // Exemplar trace IDs
+			minWidth = 12 // Exemplar trace IDs (shortened)
 		case "value":
-			minWidth = 15 // Metric values (including scientific notation)
+			minWidth = 12 // Metric values (including scientific notation)
 		case "duration":
-			minWidth = 12 // Span durations
+			minWidth = 10 // Span durations
+		case "http_method":
+			minWidth = 6 // GET, POST, etc.
+		case "http_status_code", "status_code":
+			minWidth = 6 // 200, 404, etc.
+		case "http_route":
+			minWidth = 15 // Route patterns
+		case "error":
+			minWidth = 5 // true/false
 		}
 
 		if widths[i] < minWidth {
