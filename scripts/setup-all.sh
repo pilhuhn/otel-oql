@@ -51,12 +51,28 @@ echo "🔍 Step 5: Verifying setup..."
 ./scripts/verify-setup.sh
 echo ""
 
+# Step 6: Optional Perses datasource setup
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo "📊 Step 6 (Optional): Configure Perses Datasources"
+echo ""
+echo "Would you like to configure Perses datasources now? (y/n)"
+read -r configure_perses
+
+if [[ "$configure_perses" =~ ^[Yy]$ ]]; then
+    ./scripts/setup-perses.sh
+else
+    echo "⏭️  Skipping Perses configuration"
+    echo "You can run './scripts/setup-perses.sh' later to configure datasources"
+    echo ""
+fi
+
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo "🎉 Setup complete!"
 echo ""
 echo "Infrastructure running (podman compose):"
 echo "  • Kafka:  localhost:9092"
 echo "  • Pinot:  localhost:9000"
+echo "  • Perses: localhost:8082"
 echo ""
 echo "Start the service with:"
 echo "  ./otel-oql --test-mode"
@@ -66,6 +82,9 @@ echo "  ./otel-oql --config=otel-oql.yaml"
 echo ""
 echo "Query the service with the CLI:"
 echo "  ./oql-cli --tenant-id=0 \"signal=spans limit 10\""
+echo ""
+echo "Access Perses UI:"
+echo "  http://localhost:8082"
 echo ""
 echo "Stop infrastructure:"
 echo "  podman compose down"
