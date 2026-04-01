@@ -20,6 +20,9 @@ A multi-tenant OpenTelemetry data ingestion and query service with OQL (Observab
 
 ## Quick Start
 
+NOTE: The Apache Pinot setup in the compose file is not for production. 
+Restarting the Pinot pod will delete the saved data.
+
 ### Prerequisites
 
 - Go 1.21 or later
