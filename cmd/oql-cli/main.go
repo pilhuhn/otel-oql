@@ -65,13 +65,13 @@ func main() {
 		fmt.Fprintf(os.Stderr, "  oql-cli [flags] [query]\n\n")
 		fmt.Fprintf(os.Stderr, "Examples:\n")
 		fmt.Fprintf(os.Stderr, "  # Query from command line\n")
-		fmt.Fprintf(os.Stderr, "  oql-cli --tenant-id=0 \"signal=spans limit 10\"\n\n")
+		fmt.Fprintf(os.Stderr, "  oql-cli -tenant-id=0 \"signal=spans limit 10\"\n\n")
 		fmt.Fprintf(os.Stderr, "  # Query from stdin\n")
-		fmt.Fprintf(os.Stderr, "  echo \"signal=spans where duration > 100\" | oql-cli --tenant-id=0\n\n")
+		fmt.Fprintf(os.Stderr, "  echo \"signal=spans where duration > 100\" | oql-cli -tenant-id=0\n\n")
 		fmt.Fprintf(os.Stderr, "  # Interactive mode (multi-line input, Ctrl+D to submit)\n")
-		fmt.Fprintf(os.Stderr, "  oql-cli --tenant-id=0\n\n")
+		fmt.Fprintf(os.Stderr, "  oql-cli -tenant-id=0\n\n")
 		fmt.Fprintf(os.Stderr, "  # Verbose output with SQL and stats\n")
-		fmt.Fprintf(os.Stderr, "  oql-cli --tenant-id=0 --verbose \"signal=spans limit 5\"\n\n")
+		fmt.Fprintf(os.Stderr, "  oql-cli -tenant-id=0 -verbose \"signal=spans limit 5\"\n\n")
 		fmt.Fprintf(os.Stderr, "Flags:\n")
 		flag.PrintDefaults()
 	}
@@ -1005,10 +1005,22 @@ func printRowDetails(resp *QueryResponse, rowIdx int, allFields bool) {
 	for i, col := range result.Columns {
 		if i < len(row) {
 			value := row[i]
+
+			// Skip nil values or string "null" unless --all-fields
+			if !allFields {
+				if value == nil {
+					continue
+				}
+				// Also skip string "null" (some Pinot responses use this)
+				if strVal, ok := value.(string); ok && strVal == "null" {
+					continue
+				}
+			}
+
 			// For details view, show raw value without table truncation
 			var formattedValue string
 			if value == nil {
-				formattedValue = ""
+				formattedValue = "null"
 			} else {
 				// Apply formatting but not truncation
 				switch col {
