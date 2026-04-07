@@ -464,9 +464,11 @@ func (s *Server) executeCorrelateQuery(ctx context.Context, sql string, tenantID
 	signals := rest[:baseIdx]
 	rest = rest[baseIdx+len(baseMarker):]
 
-	// Find __TABLE__ marker
+	// Find the LAST __TABLE__ marker (the one before __END_CORRELATE__, not ones inside expand markers)
+	// Search backwards from the end
 	tableIdx := -1
-	for i := 0; i < len(rest)-len(tableMarker); i++ {
+	searchEnd := len(rest) - len(correlateSuffix)
+	for i := searchEnd - len(tableMarker); i >= 0; i-- {
 		if rest[i:i+len(tableMarker)] == tableMarker {
 			tableIdx = i
 			break
@@ -482,13 +484,37 @@ func (s *Server) executeCorrelateQuery(ctx context.Context, sql string, tenantID
 	currentTable := rest[:len(rest)-len(correlateSuffix)]
 
 	// Step 1: Execute base query to get trace_ids
+	// Check if baseSQL is an expand marker - if so, execute it via executeExpandQuery
 	if s.debugQuery {
 		fmt.Printf("[DEBUG QUERY] CORRELATE: Executing base query to get trace_ids\n")
 	}
-	resp1, err := s.pinotClient.Query(ctx, baseSQL)
-	if err != nil {
-		// Pass through the Pinot error (already user-friendly)
-		return nil, err
+
+	var baseResult QueryResult
+	const expandPrefix = "__EXPAND_TRACE__"
+	if len(baseSQL) > len(expandPrefix) && baseSQL[:len(expandPrefix)] == expandPrefix {
+		// Base query is an expand operation - execute it recursively
+		expandResult, err := s.executeExpandQuery(ctx, baseSQL, tenantID)
+		if err != nil {
+			return nil, fmt.Errorf("failed to execute expand in correlate: %w", err)
+		}
+		baseResult = expandResult
+	} else {
+		// Base query is regular SQL - execute it directly
+		resp1, err := s.pinotClient.Query(ctx, baseSQL)
+		if err != nil {
+			// Pass through the Pinot error (already user-friendly)
+			return nil, err
+		}
+		baseResult = QueryResult{
+			SQL:     baseSQL,
+			Columns: resp1.ResultTable.DataSchema.ColumnNames,
+			Rows:    resp1.ResultTable.Rows,
+			Stats: QueryStats{
+				NumDocsScanned: resp1.NumDocsScanned,
+				TotalDocs:      resp1.TotalDocs,
+				TimeUsedMs:     resp1.TimeUsedMs,
+			},
+		}
 	}
 
 	// Step 2: Extract unique trace_ids from results
@@ -496,7 +522,7 @@ func (s *Server) executeCorrelateQuery(ctx context.Context, sql string, tenantID
 	traceIDColIdx := -1
 
 	// Find trace_id column index
-	for i, colName := range resp1.ResultTable.DataSchema.ColumnNames {
+	for i, colName := range baseResult.Columns {
 		if colName == "trace_id" {
 			traceIDColIdx = i
 			break
@@ -508,7 +534,7 @@ func (s *Server) executeCorrelateQuery(ctx context.Context, sql string, tenantID
 	}
 
 	// Collect unique trace_ids (filter out empty strings)
-	for _, row := range resp1.ResultTable.Rows {
+	for _, row := range baseResult.Rows {
 		if traceIDColIdx < len(row) {
 			if traceID, ok := row[traceIDColIdx].(string); ok && traceID != "" {
 				traceIDSet[traceID] = true
@@ -532,19 +558,12 @@ func (s *Server) executeCorrelateQuery(ctx context.Context, sql string, tenantID
 	signalList := strings.Split(signals, ",")
 	results := make([]QueryResult, 0)
 
-	// Include the base query results first
-	baseResult := QueryResult{
-		SQL:     baseSQL,
-		Columns: resp1.ResultTable.DataSchema.ColumnNames,
-		Rows:    resp1.ResultTable.Rows,
-		Stats: QueryStats{
-			NumDocsScanned: resp1.NumDocsScanned,
-			TotalDocs:      resp1.TotalDocs,
-			TimeUsedMs:     resp1.TimeUsedMs,
-		},
+	// Include the base query results first, UNLESS the base was an expand query
+	// (in which case the user has already seen the expanded trace)
+	if !strings.HasPrefix(baseSQL, expandPrefix) {
+		filterTenantID(&baseResult)
+		results = append(results, baseResult)
 	}
-	filterTenantID(&baseResult)
-	results = append(results, baseResult)
 
 	// Query correlated signals
 	for _, signal := range signalList {

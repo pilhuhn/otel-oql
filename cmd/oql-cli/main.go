@@ -48,6 +48,7 @@ type SessionState struct {
 	lastQuery      string          // Last query string
 	focusedTraceID string          // Currently focused trace ID
 	focusedSpanID  string          // Currently focused span ID (for span-level focus)
+	displayRows    [][]interface{} // Displayed rows (sorted/filtered) matching table output
 }
 
 func main() {
@@ -178,7 +179,7 @@ func runInteractiveMode(endpoint, tenantID string, verbose, jsonOutput, allField
 			session.focusedSpanID = ""
 			// Re-display last query results
 			if session.lastResponse != nil {
-				printResultsNumbered(session.lastResponse, session.lastQuery, verbose, allFields)
+				printResultsNumbered(session.lastResponse, session.lastQuery, verbose, allFields, session)
 			}
 			fmt.Fprintf(os.Stderr, "\n")
 			continue
@@ -287,7 +288,7 @@ func runInteractiveMode(endpoint, tenantID string, verbose, jsonOutput, allField
 			}
 			fmt.Println(string(jsonBytes))
 		} else {
-			printResultsNumbered(resp, query, verbose, allFields)
+			printResultsNumbered(resp, query, verbose, allFields, session)
 		}
 
 		fmt.Fprintf(os.Stderr, "\n") // Add spacing between queries
@@ -822,7 +823,7 @@ func handlePrintCommand(session *SessionState, input string, allFields bool) {
 			fmt.Fprintf(os.Stderr, "Invalid row number: %s\n\n", arg)
 			return
 		}
-		printRowDetails(session.lastResponse, rowNum-1, allFields)
+		printRowDetails(session.lastResponse, rowNum-1, allFields, session.displayRows)
 		return
 	}
 
@@ -935,6 +936,13 @@ func expandAbbreviations(query string, session *SessionState) (string, bool) {
 		query = "expand trace" + trimmed[2:]
 	}
 
+	// Expand "cl" to "correlate logs"
+	if lowerQuery == "cl" {
+		query = "correlate logs"
+	} else if strings.HasPrefix(lowerQuery, "cl ") {
+		query = "correlate logs" + trimmed[2:]
+	}
+
 	// Expand standalone "expand" to "expand trace"
 	if lowerQuery == "expand" {
 		query = "expand trace"
@@ -975,7 +983,7 @@ func expandAbbreviations(query string, session *SessionState) (string, bool) {
 }
 
 // printRowDetails prints full details of a specific row
-func printRowDetails(resp *QueryResponse, rowIdx int, allFields bool) {
+func printRowDetails(resp *QueryResponse, rowIdx int, allFields bool, displayRows [][]interface{}) {
 	if len(resp.Results) == 0 {
 		fmt.Fprintf(os.Stderr, "No results to display.\n\n")
 		return
@@ -984,12 +992,18 @@ func printRowDetails(resp *QueryResponse, rowIdx int, allFields bool) {
 	// For now, print from first result set
 	result := resp.Results[0]
 
-	if rowIdx < 0 || rowIdx >= len(result.Rows) {
-		fmt.Fprintf(os.Stderr, "Row #%d not found. Results contain %d rows.\n\n", rowIdx+1, len(result.Rows))
+	// Use displayRows if provided (for sorted/filtered views), otherwise use result.Rows
+	rows := result.Rows
+	if displayRows != nil {
+		rows = displayRows
+	}
+
+	if rowIdx < 0 || rowIdx >= len(rows) {
+		fmt.Fprintf(os.Stderr, "Row #%d not found. Results contain %d rows.\n\n", rowIdx+1, len(rows))
 		return
 	}
 
-	row := result.Rows[rowIdx]
+	row := rows[rowIdx]
 
 	fmt.Printf("\n=== Row #%d Details ===\n\n", rowIdx+1)
 
@@ -1109,7 +1123,7 @@ func printRowByTraceID(resp *QueryResponse, traceIDPrefix string, allFields bool
 
 	// Print all matching rows
 	for _, rowIdx := range matchedRows {
-		printRowDetails(resp, rowIdx, allFields)
+		printRowDetails(resp, rowIdx, allFields, nil)
 	}
 }
 
@@ -1154,12 +1168,12 @@ func printRowBySpanID(resp *QueryResponse, spanIDPrefix string, allFields bool) 
 
 	// Print all matching rows
 	for _, rowIdx := range matchedRows {
-		printRowDetails(resp, rowIdx, allFields)
+		printRowDetails(resp, rowIdx, allFields, nil)
 	}
 }
 
 // printResultsNumbered prints query results with row numbers
-func printResultsNumbered(resp *QueryResponse, query string, verbose, allFields bool) {
+func printResultsNumbered(resp *QueryResponse, query string, verbose, allFields bool, session *SessionState) {
 	if len(resp.Results) == 0 {
 		fmt.Println("No results")
 		return
@@ -1197,6 +1211,17 @@ func printResultsNumbered(resp *QueryResponse, query string, verbose, allFields 
 		displayRows := result.Rows
 		if isExpandTrace {
 			displayRows = sortRowsByTraceHierarchy(result.Columns, result.Rows)
+		} else if isCorrelateQuery {
+			// For correlate queries, detect signal type and sort logs by timestamp
+			sqlType := detectSignalTypeFromSQL(result.SQL)
+			if strings.ToLower(sqlType) == "logs" {
+				displayRows = sortRowsByTimestamp(result.Columns, result.Rows)
+			}
+		}
+
+		// Store displayRows in session for print command to use
+		if session != nil {
+			session.displayRows = displayRows
 		}
 
 		// Filter columns unless --all-fields is specified
@@ -1208,7 +1233,13 @@ func printResultsNumbered(resp *QueryResponse, query string, verbose, allFields 
 		var hiddenFilters map[string]string
 
 		if !allFields {
-			displayColumns, columnIndices, hiddenFilters = filterColumns(result.Columns, signalType, displayRows, query)
+			// For correlate queries, detect signal type per result set from SQL
+			resultSignalType := signalType
+			if isCorrelateQuery {
+				sqlType := detectSignalTypeFromSQL(result.SQL)
+				resultSignalType = strings.ToLower(sqlType)
+			}
+			displayColumns, columnIndices, hiddenFilters = filterColumns(result.Columns, resultSignalType, displayRows, query)
 		}
 
 		if len(displayColumns) == 0 {
@@ -1417,8 +1448,8 @@ func getPotentiallyInterestingColumns(signalType string, query string) []string 
 		}
 	case "logs":
 		return []string{
-			"timestamp", "severity_text", "body", "service_name",
-			"trace_id", "span_id", "log_level", "log_source",
+			"timestamp", "severity_text", "service_name", "span_id",
+			"trace_id", "log_level", "log_source", "body",
 		}
 	default:
 		return []string{
@@ -1520,23 +1551,24 @@ func filterColumns(allColumns []string, signalType string, rows [][]interface{},
 	// Get potentially interesting columns for this signal type
 	potentialColumns := getPotentiallyInterestingColumns(signalType, query)
 
-	// Build map for quick lookup
-	potentialMap := make(map[string]bool)
-	for _, col := range potentialColumns {
-		potentialMap[col] = true
+	// Build map for quick lookup of column indices
+	colToIndex := make(map[string]int)
+	for i, col := range allColumns {
+		colToIndex[col] = i
 	}
 
 	// Extract fields that were filtered on with equality
 	filteredFields := extractFilteredFields(query)
 
-	// Analyze each column
+	// Analyze each column in the order specified by potentialColumns
 	displayColumns := make([]string, 0)
 	columnIndices := make([]int, 0)
 	hiddenFilters := make(map[string]string) // Columns hidden due to filtering
 
-	for i, col := range allColumns {
-		// Only consider potentially interesting columns
-		if !potentialMap[col] {
+	for _, col := range potentialColumns {
+		// Check if this column exists in the actual results
+		i, exists := colToIndex[col]
+		if !exists {
 			continue
 		}
 
@@ -1846,6 +1878,54 @@ func sortRowsByTraceHierarchy(columns []string, rows [][]interface{}) [][]interf
 	return sortedRows
 }
 
+// sortRowsByTimestamp sorts rows by timestamp in ascending order
+func sortRowsByTimestamp(columns []string, rows [][]interface{}) [][]interface{} {
+	// Find timestamp column index
+	timestampIdx := -1
+	for i, col := range columns {
+		if col == "timestamp" {
+			timestampIdx = i
+			break
+		}
+	}
+
+	// If no timestamp column, return original order
+	if timestampIdx == -1 {
+		return rows
+	}
+
+	// Copy rows to avoid modifying original
+	sorted := make([][]interface{}, len(rows))
+	copy(sorted, rows)
+
+	// Simple bubble sort by timestamp (ascending)
+	for i := 0; i < len(sorted); i++ {
+		for j := i + 1; j < len(sorted); j++ {
+			ts1 := int64(0)
+			ts2 := int64(0)
+
+			if timestampIdx < len(sorted[i]) && sorted[i][timestampIdx] != nil {
+				if t, ok := toInt64(sorted[i][timestampIdx]); ok {
+					ts1 = t
+				}
+			}
+
+			if timestampIdx < len(sorted[j]) && sorted[j][timestampIdx] != nil {
+				if t, ok := toInt64(sorted[j][timestampIdx]); ok {
+					ts2 = t
+				}
+			}
+
+			// Sort ascending (earlier timestamps first)
+			if ts1 > ts2 {
+				sorted[i], sorted[j] = sorted[j], sorted[i]
+			}
+		}
+	}
+
+	return sorted
+}
+
 // buildTraceIndentation builds an indentation map for trace hierarchy
 func buildTraceIndentation(columns []string, rows [][]interface{}) map[int]int {
 	indentMap := make(map[int]int)
@@ -1990,7 +2070,13 @@ func printResults(resp *QueryResponse, query string, verbose, allFields bool) {
 		var hiddenFilters map[string]string
 
 		if !allFields {
-			displayColumns, columnIndices, hiddenFilters = filterColumns(result.Columns, signalType, displayRows, query)
+			// For correlate queries, detect signal type per result set from SQL
+			resultSignalType := signalType
+			if isCorrelateQuery {
+				sqlType := detectSignalTypeFromSQL(result.SQL)
+				resultSignalType = strings.ToLower(sqlType)
+			}
+			displayColumns, columnIndices, hiddenFilters = filterColumns(result.Columns, resultSignalType, displayRows, query)
 		}
 
 		if len(displayColumns) == 0 {
