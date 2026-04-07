@@ -27,8 +27,20 @@ func TestTranslator_IntrinsicFields(t *testing.T) {
 		{
 			name:        "status error",
 			query:       "{status = error}",
-			wantInSQL:   "status_code = 'ERROR'",
-			description: "status enum value converts to OTel status code",
+			wantInSQL:   "status_code = 'Error'",
+			description: "status enum value converts to OTLP .String() format (capitalized)",
+		},
+		{
+			name:        "status ok",
+			query:       "{status = ok}",
+			wantInSQL:   "status_code = 'Ok'",
+			description: "status ok converts to 'Ok' to match Pinot storage from OTLP",
+		},
+		{
+			name:        "status unset",
+			query:       "{status = unset}",
+			wantInSQL:   "status_code = 'Unset'",
+			description: "status unset converts to 'Unset' to match Pinot storage from OTLP",
 		},
 		{
 			name:        "kind server",

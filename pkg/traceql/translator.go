@@ -255,14 +255,15 @@ func (t *Translator) formatValue(value interface{}) (string, error) {
 }
 
 // translateStatusValue converts TraceQL status values to OTel status codes
+// These match the .String() output from OTLP Status.Code enum: "Unset", "Ok", "Error"
 func translateStatusValue(status StatusValue) string {
 	switch status {
 	case StatusUnset:
-		return "UNSET"
+		return "Unset"
 	case StatusOK:
-		return "OK"
+		return "Ok"
 	case StatusError:
-		return "ERROR"
+		return "Error"
 	default:
 		return string(status)
 	}
