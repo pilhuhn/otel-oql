@@ -38,6 +38,8 @@ for topic in otel-spans otel-metrics otel-logs; do
         --replication-factor 1 2>&1 || echo "  Topic $topic may already exist"
 done
 echo "✅ Kafka topics created"
+echo "⏳ Waiting for Kafka metadata to propagate (3 seconds)..."
+sleep 3
 echo ""
 
 # Step 4: Initialize schemas

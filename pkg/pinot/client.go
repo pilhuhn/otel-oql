@@ -134,32 +134,59 @@ func (c *Client) CreateSchema(ctx context.Context, schema interface{}) error {
 	return nil
 }
 
-// CreateTable creates a table in Pinot
+// CreateTable creates a table in Pinot with retry logic for Kafka metadata propagation
 func (c *Client) CreateTable(ctx context.Context, tableConfig interface{}) error {
 	jsonData, err := json.Marshal(tableConfig)
 	if err != nil {
 		return fmt.Errorf("failed to marshal table config: %w", err)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, "POST", c.brokerURL+"/tables", bytes.NewBuffer(jsonData))
-	if err != nil {
-		return fmt.Errorf("failed to create request: %w", err)
-	}
+	// Retry configuration for Kafka metadata propagation race condition
+	maxRetries := 5
+	baseDelay := 2 * time.Second
 
-	req.Header.Set("Content-Type", "application/json")
+	var lastErr error
+	for attempt := 0; attempt <= maxRetries; attempt++ {
+		if attempt > 0 {
+			// Exponential backoff: 2s, 4s, 8s, 16s, 32s
+			delay := baseDelay * time.Duration(1<<uint(attempt-1))
+			fmt.Printf("⏳ Retrying table creation in %v (attempt %d/%d)...\n", delay, attempt+1, maxRetries+1)
+			time.Sleep(delay)
+		}
 
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return fmt.Errorf("failed to create table: %w", err)
-	}
-	defer resp.Body.Close()
+		req, err := http.NewRequestWithContext(ctx, "POST", c.brokerURL+"/tables", bytes.NewBuffer(jsonData))
+		if err != nil {
+			return fmt.Errorf("failed to create request: %w", err)
+		}
 
-	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
+		req.Header.Set("Content-Type", "application/json")
+
+		resp, err := c.httpClient.Do(req)
+		if err != nil {
+			lastErr = fmt.Errorf("failed to create table: %w", err)
+			continue
+		}
+
 		body, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("create table failed with status %d: %s", resp.StatusCode, string(body))
+		resp.Body.Close()
+
+		if resp.StatusCode == http.StatusOK || resp.StatusCode == http.StatusCreated {
+			return nil
+		}
+
+		// Check if this is a Kafka partition metadata error (transient)
+		bodyStr := string(body)
+		if resp.StatusCode == http.StatusInternalServerError &&
+		   strings.Contains(bodyStr, "Failed to fetch partition information for topic") {
+			lastErr = fmt.Errorf("kafka topic metadata not ready (this is normal on first setup)")
+			continue // Retry this specific error
+		}
+
+		// Non-retryable error
+		return fmt.Errorf("create table failed with status %d: %s", resp.StatusCode, bodyStr)
 	}
 
-	return nil
+	return fmt.Errorf("create table failed after %d retries: %w", maxRetries+1, lastErr)
 }
 
 // QueryResponse represents a Pinot query response
