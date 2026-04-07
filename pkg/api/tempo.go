@@ -41,7 +41,19 @@ type TempoTagsResponse struct {
 
 // TempoTagValuesResponse represents the response for /api/v2/search/tag/{tag}/values
 type TempoTagValuesResponse struct {
-	TagValues []string `json:"tagValues"`
+	TagValues []TagValue         `json:"tagValues"`
+	Metrics   *TagValueMetrics   `json:"metrics,omitempty"`
+}
+
+// TagValue represents a single tag value with its type
+type TagValue struct {
+	Type  string `json:"type"`
+	Value string `json:"value"`
+}
+
+// TagValueMetrics contains metrics about the tag values query
+type TagValueMetrics struct {
+	InspectedBytes string `json:"inspectedBytes,omitempty"`
 }
 
 // handleTempoSearchTags handles GET /api/v2/search/tags
@@ -178,19 +190,31 @@ func (s *Server) handleTempoSearchTagValues(w http.ResponseWriter, r *http.Reque
 	}
 
 	// Extract values from results
-	values := []string{}
+	tagValues := []TagValue{}
+	var totalBytes int64
+
 	if len(results) > 0 && len(results[0].Rows) > 0 {
 		for _, row := range results[0].Rows {
 			if len(row) > 0 {
-				if val, ok := row[0].(string); ok && val != "" {
-					values = append(values, val)
+				value, valueType := s.extractTagValue(row[0])
+				if value != "" {
+					tagValues = append(tagValues, TagValue{
+						Type:  valueType,
+						Value: value,
+					})
 				}
 			}
 		}
+
+		// Calculate inspected bytes from query stats
+		totalBytes = results[0].Stats.NumDocsScanned
 	}
 
 	response := TempoTagValuesResponse{
-		TagValues: values,
+		TagValues: tagValues,
+		Metrics: &TagValueMetrics{
+			InspectedBytes: fmt.Sprintf("%d", totalBytes),
+		},
 	}
 
 	s.obs.RecordRequest(ctx, "/api/v2/search/tag/*/values", time.Since(start), http.StatusOK)
@@ -276,6 +300,32 @@ func (s *Server) buildTempoTagValuesSQL(tenantID int, column string, start, end 
 	sql += " LIMIT 100" // Limit to 100 values for autocomplete
 
 	return sql
+}
+
+// extractTagValue extracts the value and determines its type from a Pinot result
+func (s *Server) extractTagValue(val interface{}) (string, string) {
+	if val == nil {
+		return "", "string"
+	}
+
+	switch v := val.(type) {
+	case string:
+		return v, "string"
+	case int:
+		return fmt.Sprintf("%d", v), "int"
+	case int64:
+		return fmt.Sprintf("%d", v), "int"
+	case float64:
+		// Check if it's actually an integer value
+		if v == float64(int64(v)) {
+			return fmt.Sprintf("%d", int64(v)), "int"
+		}
+		return fmt.Sprintf("%f", v), "float"
+	case bool:
+		return fmt.Sprintf("%t", v), "bool"
+	default:
+		return fmt.Sprintf("%v", v), "string"
+	}
 }
 
 // TempoSearchResponse represents the response for /api/v2/search
