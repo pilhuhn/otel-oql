@@ -272,7 +272,7 @@ func TestTempoTraceByID(t *testing.T) {
 				{Key: "http.method", Value: TempoAnyValue{StringValue: &methodVal}},
 				{Key: "http.status_code", Value: TempoAnyValue{IntValue: &statusCode}},
 			},
-			Status: TempoStatus{Code: "STATUS_CODE_OK"},
+			Status: TempoStatus{Code: 1}, // 1 = STATUS_CODE_OK
 		}
 
 		scopeSpans := TempoScopeSpans{

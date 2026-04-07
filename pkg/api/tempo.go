@@ -285,12 +285,19 @@ type TempoSearchResponse struct {
 
 // TempoTrace represents a single trace in the search results
 type TempoTrace struct {
-	TraceID           string                 `json:"traceID"`
-	RootServiceName   string                 `json:"rootServiceName,omitempty"`
-	RootTraceName     string                 `json:"rootTraceName,omitempty"`
-	StartTimeUnixNano int64                  `json:"startTimeUnixNano"`
-	DurationMs        int                    `json:"durationMs"`
-	SpanSets          []TempoSpanSet         `json:"spanSets,omitempty"`
+	TraceID           string                    `json:"traceID"`
+	RootServiceName   string                    `json:"rootServiceName,omitempty"`
+	RootTraceName     string                    `json:"rootTraceName,omitempty"`
+	StartTimeUnixNano int64                     `json:"startTimeUnixNano"`
+	DurationMs        int                       `json:"durationMs"`
+	SpanSets          []TempoSpanSet            `json:"spanSets,omitempty"`
+	ServiceStats      map[string]ServiceStats   `json:"serviceStats,omitempty"`
+}
+
+// ServiceStats represents per-service statistics in a trace
+type ServiceStats struct {
+	SpanCount  int `json:"spanCount"`
+	ErrorCount int `json:"errorCount,omitempty"`
 }
 
 // TempoSpanSet represents a set of matching spans
@@ -443,17 +450,45 @@ func (s *Server) transformToTempoTraces(results []QueryResult) []TempoTrace {
 		var rootServiceName, rootTraceName string
 		var minStartTime int64 = 0
 		var maxEndTime int64 = 0
+		serviceStats := make(map[string]ServiceStats)
 
 		for _, span := range spans {
-			// Extract span name for root
-			if name, ok := span["name"].(string); ok && rootTraceName == "" {
-				rootTraceName = name
+			// Check if this is the root span (no parent_span_id)
+			isRootSpan := false
+			if parentSpanID, ok := span["parent_span_id"].(string); ok {
+				// Root span has empty or all-zero parent_span_id
+				if parentSpanID == "" || parentSpanID == "0000000000000000" {
+					isRootSpan = true
+				}
 			}
 
-			// Extract service name for root
-			if service, ok := span["service_name"].(string); ok && rootServiceName == "" {
-				rootServiceName = service
+			// Extract span name - use root span's name for rootTraceName
+			if isRootSpan {
+				if name, ok := span["name"].(string); ok {
+					rootTraceName = name
+				}
 			}
+
+			// Extract service name for root and stats
+			serviceName := "unknown"
+			if service, ok := span["service_name"].(string); ok && service != "" {
+				serviceName = service
+				if isRootSpan {
+					rootServiceName = service
+				}
+			}
+
+			// Calculate per-service stats
+			stats := serviceStats[serviceName]
+			stats.SpanCount++
+
+			// Check if span has error flag
+			if errorVal, ok := span["error"]; ok {
+				if isError, ok := errorVal.(bool); ok && isError {
+					stats.ErrorCount++
+				}
+			}
+			serviceStats[serviceName] = stats
 
 			// Calculate trace time bounds
 			var tsMillis int64
@@ -514,6 +549,7 @@ func (s *Server) transformToTempoTraces(results []QueryResult) []TempoTrace {
 			RootTraceName:     rootTraceName,
 			StartTimeUnixNano: minStartTime * 1000000, // Convert millis to nanos
 			DurationMs:        durationMs,
+			ServiceStats:      serviceStats,
 		})
 	}
 
@@ -527,11 +563,12 @@ type TempoV1SearchResponse struct {
 
 // TempoV1Trace represents a trace in v1 search results
 type TempoV1Trace struct {
-	TraceID           string `json:"traceID"`
-	RootServiceName   string `json:"rootServiceName"`
-	RootTraceName     string `json:"rootTraceName"`
-	StartTimeUnixNano string `json:"startTimeUnixNano"` // v1 uses string
-	DurationMs        int    `json:"durationMs"`
+	TraceID           string                  `json:"traceID"`
+	RootServiceName   string                  `json:"rootServiceName"`
+	RootTraceName     string                  `json:"rootTraceName"`
+	StartTimeUnixNano string                  `json:"startTimeUnixNano"` // v1 uses string
+	DurationMs        int                     `json:"durationMs"`
+	ServiceStats      map[string]ServiceStats `json:"serviceStats,omitempty"`
 }
 
 // TempoMetadata contains metadata about available values
@@ -753,17 +790,45 @@ func (s *Server) transformToTempoV1Traces(results []QueryResult) []TempoV1Trace 
 		var rootServiceName, rootTraceName string
 		var minStartTime int64 = 0
 		var maxEndTime int64 = 0
+		serviceStats := make(map[string]ServiceStats)
 
 		for _, span := range spans {
-			// Extract span name for root
-			if name, ok := span["name"].(string); ok && rootTraceName == "" {
-				rootTraceName = name
+			// Check if this is the root span (no parent_span_id)
+			isRootSpan := false
+			if parentSpanID, ok := span["parent_span_id"].(string); ok {
+				// Root span has empty or all-zero parent_span_id
+				if parentSpanID == "" || parentSpanID == "0000000000000000" {
+					isRootSpan = true
+				}
 			}
 
-			// Extract service name for root
-			if service, ok := span["service_name"].(string); ok && rootServiceName == "" {
-				rootServiceName = service
+			// Extract span name - use root span's name for rootTraceName
+			if isRootSpan {
+				if name, ok := span["name"].(string); ok {
+					rootTraceName = name
+				}
 			}
+
+			// Extract service name for root and stats
+			serviceName := "unknown"
+			if service, ok := span["service_name"].(string); ok && service != "" {
+				serviceName = service
+				if isRootSpan {
+					rootServiceName = service
+				}
+			}
+
+			// Calculate per-service stats
+			stats := serviceStats[serviceName]
+			stats.SpanCount++
+
+			// Check if span has error flag
+			if errorVal, ok := span["error"]; ok {
+				if isError, ok := errorVal.(bool); ok && isError {
+					stats.ErrorCount++
+				}
+			}
+			serviceStats[serviceName] = stats
 
 			// Calculate trace time bounds - handle multiple types from Pinot
 			var tsMillis int64
@@ -827,6 +892,7 @@ func (s *Server) transformToTempoV1Traces(results []QueryResult) []TempoV1Trace 
 			RootTraceName:     rootTraceName,
 			StartTimeUnixNano: fmt.Sprintf("%d", startTimeNano),
 			DurationMs:        durationMs,
+			ServiceStats:      serviceStats,
 		})
 	}
 
