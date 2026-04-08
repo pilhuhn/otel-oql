@@ -215,12 +215,25 @@ func (t *Translator) translateBinaryCondition(cond *oql.BinaryCondition) (string
 		return "", fmt.Errorf("%s", errMsg)
 	}
 
-	sqlOperator, err := t.convertOperator(cond.Operator)
+	// Detect wildcards in string values and convert to LIKE
+	sqlOperator := cond.Operator
+	if str, ok := cond.Right.(string); ok && (strings.Contains(str, "*") || strings.Contains(str, "%")) {
+		// String value contains wildcards - use LIKE instead of =
+		if cond.Operator == "=" || cond.Operator == "==" {
+			sqlOperator = "LIKE"
+		} else if cond.Operator == "!=" {
+			sqlOperator = "NOT LIKE"
+		}
+		// Convert * to % for SQL LIKE syntax (in the already-formatted value)
+		valueStr = strings.ReplaceAll(valueStr, "*", "%")
+	}
+
+	sqlOp, err := t.convertOperator(sqlOperator)
 	if err != nil {
 		return "", err
 	}
 
-	return fmt.Sprintf("%s %s %s", fieldSQL, sqlOperator, valueStr), nil
+	return fmt.Sprintf("%s %s %s", fieldSQL, sqlOp, valueStr), nil
 }
 
 // convertOperator converts OQL operators to SQL operators
@@ -231,6 +244,8 @@ func (t *Translator) convertOperator(op string) (string, error) {
 	case "!=":
 		return "<>", nil
 	case ">", "<", ">=", "<=", "=":
+		return op, nil
+	case "LIKE", "NOT LIKE":
 		return op, nil
 	default:
 		return "", fmt.Errorf("unsupported operator: %s", op)

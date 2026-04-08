@@ -770,3 +770,117 @@ func TestTranslator_Sort(t *testing.T) {
 		})
 	}
 }
+
+func TestTranslator_WildcardPatternMatching(t *testing.T) {
+	tests := []struct {
+		name        string
+		query       *oql.Query
+		wantContain string
+		description string
+	}{
+		{
+			name: "contains wildcard",
+			query: &oql.Query{
+				Signal: oql.SignalLogs,
+				Operations: []oql.Operation{
+					&oql.WhereOp{
+						Condition: &oql.BinaryCondition{
+							Left:     "body",
+							Operator: "=",
+							Right:    "*pool*",
+						},
+					},
+				},
+			},
+			wantContain: "body LIKE '%pool%'",
+			description: "wildcards in value should use LIKE with % conversion",
+		},
+		{
+			name: "prefix wildcard",
+			query: &oql.Query{
+				Signal: oql.SignalLogs,
+				Operations: []oql.Operation{
+					&oql.WhereOp{
+						Condition: &oql.BinaryCondition{
+							Left:     "body",
+							Operator: "=",
+							Right:    "GET *",
+						},
+					},
+				},
+			},
+			wantContain: "body LIKE 'GET %'",
+			description: "trailing wildcard should use LIKE",
+		},
+		{
+			name: "or conditions with wildcards",
+			query: &oql.Query{
+				Signal: oql.SignalLogs,
+				Operations: []oql.Operation{
+					&oql.WhereOp{
+						Condition: &oql.OrCondition{
+							Conditions: []oql.Condition{
+								&oql.BinaryCondition{
+									Left:     "body",
+									Operator: "=",
+									Right:    "*timeout*",
+								},
+								&oql.BinaryCondition{
+									Left:     "body",
+									Operator: "=",
+									Right:    "*connection*",
+								},
+							},
+						},
+					},
+				},
+			},
+			wantContain: "body LIKE '%timeout%' OR body LIKE '%connection%'",
+			description: "multiple OR conditions with wildcards",
+		},
+		{
+			name: "no wildcard exact match",
+			query: &oql.Query{
+				Signal: oql.SignalLogs,
+				Operations: []oql.Operation{
+					&oql.WhereOp{
+						Condition: &oql.BinaryCondition{
+							Left:     "body",
+							Operator: "=",
+							Right:    "error",
+						},
+					},
+				},
+			},
+			wantContain: "body = 'error'",
+			description: "no wildcards should use exact match",
+		},
+		{
+			name: "not equals with wildcard",
+			query: &oql.Query{
+				Signal: oql.SignalLogs,
+				Operations: []oql.Operation{
+					&oql.WhereOp{
+						Condition: &oql.BinaryCondition{
+							Left:     "body",
+							Operator: "!=",
+							Right:    "*debug*",
+						},
+					},
+				},
+			},
+			wantContain: "body NOT LIKE '%debug%'",
+			description: "!= with wildcards should use NOT LIKE",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			translator := NewTranslator(0)
+			sqls, err := translator.TranslateQuery(tt.query)
+			require.NoError(t, err, tt.description)
+			require.Len(t, sqls, 1)
+			assert.Contains(t, sqls[0], tt.wantContain, tt.description)
+		})
+	}
+}
