@@ -8,6 +8,7 @@ import (
 
 	"github.com/pilhuhn/otel-oql/pkg/api/formats"
 	"github.com/pilhuhn/otel-oql/pkg/logql"
+	"github.com/pilhuhn/otel-oql/pkg/querylangs/common"
 	"github.com/pilhuhn/otel-oql/pkg/tenant"
 )
 
@@ -216,7 +217,7 @@ func (s *Server) handleLokiLabels(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if s.debugQuery {
-		fmt.Printf("[DEBUG QUERY] Loki labels query (tenant_id=%d, start=%v, end=%v)\n", 
+		fmt.Printf("[DEBUG QUERY] Loki labels query (tenant_id=%d, start=%v, end=%v)\n",
 			tenantID, params.Start, params.End)
 	}
 
@@ -245,7 +246,7 @@ func (s *Server) handleLokiLabels(w http.ResponseWriter, r *http.Request) {
 			Rows:    r.Rows,
 		})
 	}
-	
+
 	response := formats.TransformToPrometheusLabels(pinotResults)
 
 	// Return response
@@ -341,31 +342,9 @@ func (s *Server) buildLokiLabelsSQL(tenantID int, params *LokiLabelsParams) stri
 
 // buildLokiLabelValuesSQL constructs SQL to get distinct values for a specific label
 func (s *Server) buildLokiLabelValuesSQL(tenantID int, params *LokiLabelValuesParams) string {
-	var column string
-
-	// Map common label names to native columns
-	switch params.LabelName {
-	case "service_name", "job":
-		column = "service_name"
-	case "host_name", "instance":
-		column = "host_name"
-	case "log_level", "level":
-		column = "log_level"
-	case "log_source":
-		column = "log_source"
-	case "environment":
-		column = "environment"
-	case "trace_id":
-		column = "trace_id"
-	case "span_id":
-		column = "span_id"
-	default:
-		// For unknown labels, use the label name directly
-		column = params.LabelName
-	}
-
+	expr := common.LogLabelDistinctExpr(params.LabelName)
 	sql := fmt.Sprintf("SELECT DISTINCT %s FROM otel_logs WHERE tenant_id = %d AND %s IS NOT NULL",
-		column, tenantID, column)
+		expr, tenantID, expr)
 
 	// Add time range if provided (Loki timestamps are in nanoseconds, convert to milliseconds)
 	if !params.Start.IsZero() && !params.End.IsZero() {

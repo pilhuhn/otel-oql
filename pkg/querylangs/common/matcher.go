@@ -19,7 +19,7 @@ func TranslateLabelMatcher(matcher *labels.Matcher, getNativeColumn func(string)
 		fieldRef = nativeCol
 	} else {
 		// Use JSON extraction for attributes
-		fieldRef = fmt.Sprintf("JSON_EXTRACT_SCALAR(attributes, '$.%s', 'STRING')", labelName)
+		fieldRef = fmt.Sprintf("JSON_EXTRACT_SCALAR(attributes, %s, 'STRING')", sqlutil.JSONObjectKeyPathLiteral(labelName))
 	}
 
 	switch matcher.Type {

@@ -10,6 +10,7 @@ import (
 
 	"github.com/pilhuhn/otel-oql/pkg/api/formats"
 	"github.com/pilhuhn/otel-oql/pkg/promql"
+	"github.com/pilhuhn/otel-oql/pkg/querylangs/common"
 	"github.com/pilhuhn/otel-oql/pkg/tenant"
 )
 
@@ -356,19 +357,9 @@ func (s *Server) buildLabelsSQL(tenantID int, params *PrometheusLabelsParams) st
 
 // buildLabelValuesSQL constructs SQL to get distinct values for a specific label
 func (s *Server) buildLabelValuesSQL(tenantID int, params *PrometheusLabelValuesParams) string {
-	var column string
-
-	// Special case: __name__ refers to metric_name
-	if params.LabelName == "__name__" {
-		column = "metric_name"
-	} else {
-		// Map label name to column name (use native columns where available)
-		// For now, use the label name directly
-		column = params.LabelName
-	}
-
+	expr := common.MetricLabelDistinctExpr(params.LabelName)
 	sql := fmt.Sprintf("SELECT DISTINCT %s FROM otel_metrics WHERE tenant_id = %d AND %s IS NOT NULL",
-		column, tenantID, column)
+		expr, tenantID, expr)
 
 	// Add time range if provided
 	if !params.Start.IsZero() && !params.End.IsZero() {

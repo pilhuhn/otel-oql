@@ -248,7 +248,7 @@ func (t *Translator) applyAggregation(baseSQL string, agg *Aggregator) (string, 
 		if nativeColumn != "" {
 			groupFields = append(groupFields, nativeColumn)
 		} else {
-			groupFields = append(groupFields, fmt.Sprintf("JSON_EXTRACT_SCALAR(attributes, '$.%s', 'STRING')", label))
+			groupFields = append(groupFields, fmt.Sprintf("JSON_EXTRACT_SCALAR(attributes, %s, 'STRING')", sqlutil.JSONObjectKeyPathLiteral(label)))
 		}
 	}
 

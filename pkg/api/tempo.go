@@ -13,8 +13,8 @@ import (
 	"github.com/pilhuhn/otel-oql/pkg/tenant"
 	"github.com/pilhuhn/otel-oql/pkg/traceql"
 
-	common "go.opentelemetry.io/proto/otlp/common/v1"
 	collectortrace "go.opentelemetry.io/proto/otlp/collector/trace/v1"
+	common "go.opentelemetry.io/proto/otlp/common/v1"
 	resource "go.opentelemetry.io/proto/otlp/resource/v1"
 	tracepb "go.opentelemetry.io/proto/otlp/trace/v1"
 	"google.golang.org/protobuf/proto"
@@ -41,8 +41,8 @@ type TempoTagsResponse struct {
 
 // TempoTagValuesResponse represents the response for /api/v2/search/tag/{tag}/values
 type TempoTagValuesResponse struct {
-	TagValues []TagValue         `json:"tagValues"`
-	Metrics   *TagValueMetrics   `json:"metrics,omitempty"`
+	TagValues []TagValue       `json:"tagValues"`
+	Metrics   *TagValueMetrics `json:"metrics,omitempty"`
 }
 
 // TagValue represents a single tag value with its type
@@ -271,7 +271,7 @@ func (s *Server) mapSpanAttributeToColumn(attrName string) string {
 	}
 
 	// Not a native column - use JSON extraction
-	return fmt.Sprintf("JSON_EXTRACT_SCALAR(attributes, '$.%s', 'STRING')", attrName)
+	return fmt.Sprintf("JSON_EXTRACT_SCALAR(attributes, %s, 'STRING')", sqlutil.JSONObjectKeyPathLiteral(attrName))
 }
 
 // mapResourceAttributeToColumn maps a resource attribute to Pinot column
@@ -282,7 +282,7 @@ func (s *Server) mapResourceAttributeToColumn(attrName string) string {
 	}
 
 	// Not a native column - use JSON extraction
-	return fmt.Sprintf("JSON_EXTRACT_SCALAR(resource_attributes, '$.%s', 'STRING')", attrName)
+	return fmt.Sprintf("JSON_EXTRACT_SCALAR(resource_attributes, %s, 'STRING')", sqlutil.JSONObjectKeyPathLiteral(attrName))
 }
 
 // buildTempoTagValuesSQL builds SQL to get distinct values for a tag
@@ -335,13 +335,13 @@ type TempoSearchResponse struct {
 
 // TempoTrace represents a single trace in the search results
 type TempoTrace struct {
-	TraceID           string                    `json:"traceID"`
-	RootServiceName   string                    `json:"rootServiceName,omitempty"`
-	RootTraceName     string                    `json:"rootTraceName,omitempty"`
-	StartTimeUnixNano int64                     `json:"startTimeUnixNano"`
-	DurationMs        int                       `json:"durationMs"`
-	SpanSets          []TempoSpanSet            `json:"spanSets,omitempty"`
-	ServiceStats      map[string]ServiceStats   `json:"serviceStats,omitempty"`
+	TraceID           string                  `json:"traceID"`
+	RootServiceName   string                  `json:"rootServiceName,omitempty"`
+	RootTraceName     string                  `json:"rootTraceName,omitempty"`
+	StartTimeUnixNano int64                   `json:"startTimeUnixNano"`
+	DurationMs        int                     `json:"durationMs"`
+	SpanSets          []TempoSpanSet          `json:"spanSets,omitempty"`
+	ServiceStats      map[string]ServiceStats `json:"serviceStats,omitempty"`
 }
 
 // ServiceStats represents per-service statistics in a trace
@@ -647,7 +647,7 @@ func (s *Server) handleTempoV1Search(w http.ResponseWriter, r *http.Request) {
 	query := r.URL.Query()
 	q := query.Get("q") // TraceQL query (often just "{}")
 	limitStr := query.Get("limit")
-	
+
 	limit := 20 // Default limit
 	if limitStr != "" {
 		if l, err := strconv.Atoi(limitStr); err == nil && l > 0 {
@@ -744,24 +744,24 @@ func (s *Server) handleTempoV1Search(w http.ResponseWriter, r *http.Request) {
 func (s *Server) getTempoMetadata(ctx context.Context, tenantID int, start, end *time.Time) (*TempoMetadata, error) {
 	// Build SQL to get distinct service names
 	serviceNamesSQL := fmt.Sprintf("SELECT DISTINCT service_name FROM otel_spans WHERE tenant_id = %d AND service_name IS NOT NULL", tenantID)
-	
+
 	if start != nil && end != nil {
 		startMillis := start.UnixMilli()
 		endMillis := end.UnixMilli()
 		serviceNamesSQL += fmt.Sprintf(" AND \"timestamp\" >= %d AND \"timestamp\" <= %d", startMillis, endMillis)
 	}
-	
+
 	serviceNamesSQL += " LIMIT 100"
 
 	// Build SQL to get distinct operation names (span names)
 	operationNamesSQL := fmt.Sprintf("SELECT DISTINCT name FROM otel_spans WHERE tenant_id = %d AND name IS NOT NULL", tenantID)
-	
+
 	if start != nil && end != nil {
 		startMillis := start.UnixMilli()
 		endMillis := end.UnixMilli()
 		operationNamesSQL += fmt.Sprintf(" AND \"timestamp\" >= %d AND \"timestamp\" <= %d", startMillis, endMillis)
 	}
-	
+
 	operationNamesSQL += " LIMIT 100"
 
 	// Execute both queries
@@ -968,7 +968,7 @@ type TempoBatch struct {
 
 // TempoResourceSpans represents spans from a single resource
 type TempoResourceSpans struct {
-	Resource   TempoResource   `json:"resource"`
+	Resource   TempoResource     `json:"resource"`
 	ScopeSpans []TempoScopeSpans `json:"scopeSpans"`
 }
 
@@ -997,7 +997,7 @@ type TempoTraceSpan struct {
 	Name              string           `json:"name"`
 	Kind              int              `json:"kind,omitempty"` // OTLP SpanKind enum (0-5)
 	StartTimeUnixNano string           `json:"startTimeUnixNano"`
-	EndTimeUnixNano   string           `json:"endTimeUnixNano"` // Required by OTLP
+	EndTimeUnixNano   string           `json:"endTimeUnixNano"`         // Required by OTLP
 	DurationNanos     string           `json:"durationNanos,omitempty"` // Optional, for convenience
 	Attributes        []TempoAttribute `json:"attributes,omitempty"`
 	Status            TempoStatus      `json:"status,omitempty"`
@@ -1005,8 +1005,8 @@ type TempoTraceSpan struct {
 
 // TempoAttribute represents a key-value attribute in OTLP format
 type TempoAttribute struct {
-	Key   string         `json:"key"`
-	Value TempoAnyValue  `json:"value"`
+	Key   string        `json:"key"`
+	Value TempoAnyValue `json:"value"`
 }
 
 // TempoAnyValue represents an OTLP AnyValue (type-wrapped value)
@@ -1164,7 +1164,6 @@ func (s *Server) handleTempoTraceByID(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, trace)
 	}
 }
-
 
 // transformToTempoTraceV1 transforms Pinot query results to Tempo v1 trace format (batches)
 func (s *Server) transformToTempoTraceV1(result QueryResult) TempoTraceResponseV1 {
@@ -1557,7 +1556,6 @@ func (s *Server) buildTempoTraceSpan(spanData map[string]interface{}) TempoTrace
 	span := TempoTraceSpan{
 		Attributes: []TempoAttribute{},
 	}
-
 
 	// Extract core fields
 	if val, ok := spanData["trace_id"].(string); ok {

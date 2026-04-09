@@ -53,5 +53,5 @@ func validateAttributeKey(key string) error {
 // jsonPathLiteral returns a SQL string literal containing a JSON path for a top-level key
 // (e.g. $.my.key). The key is embedded using standard SQL string escaping.
 func jsonPathLiteral(attributeKey string) string {
-	return sqlutil.StringLiteral("$." + attributeKey)
+	return sqlutil.JSONObjectKeyPathLiteral(attributeKey)
 }

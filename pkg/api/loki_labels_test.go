@@ -83,9 +83,9 @@ func TestLokiLabelValues(t *testing.T) {
 			wantCol:   "service_name",
 		},
 		{
-			name:      "job label (maps to service_name)",
+			name:      "job label (native column job)",
 			labelName: "job",
-			wantCol:   "service_name",
+			wantCol:   "job",
 		},
 		{
 			name:      "level label (maps to log_level)",
@@ -96,6 +96,11 @@ func TestLokiLabelValues(t *testing.T) {
 			name:      "trace_id label",
 			labelName: "trace_id",
 			wantCol:   "trace_id",
+		},
+		{
+			name:      "unknown label uses JSON",
+			labelName: "custom_stream",
+			wantCol:   "JSON_EXTRACT_SCALAR(attributes, '$.custom_stream', 'STRING')",
 		},
 	}
 
@@ -121,5 +126,32 @@ func TestLokiLabelValues(t *testing.T) {
 				t.Errorf("Expected SQL to query otel_logs table, got: %s", sql)
 			}
 		})
+	}
+}
+
+func TestLokiLabelValuesSQLInjectionLabelNameNotIdentifier(t *testing.T) {
+	obs, _ := observability.New(context.Background(), observability.Config{
+		ServiceName: "test",
+		Enabled:     false,
+	})
+	defer obs.Shutdown(context.Background())
+
+	s := &Server{
+		pinotClient:      pinot.NewClient("http://localhost:9000"),
+		validator:        tenant.NewValidator(true),
+		obs:              obs,
+		debugQuery:       false,
+		debugTranslation: false,
+	}
+
+	sql := s.buildLokiLabelValuesSQL(0, &LokiLabelValuesParams{
+		LabelName: "bad'); SELECT 1; --",
+		Limit:     5,
+	})
+	if !strings.HasPrefix(sql, "SELECT DISTINCT JSON_EXTRACT_SCALAR(attributes,") {
+		t.Fatalf("unknown label must use JSON_EXTRACT_SCALAR, not bare identifier: %s", sql)
+	}
+	if !strings.Contains(sql, "tenant_id = 0") {
+		t.Fatalf("expected tenant filter: %s", sql)
 	}
 }

@@ -12,3 +12,8 @@ func TestStringLiteral(t *testing.T) {
 	assert.Equal(t, "'a''b'", StringLiteral("a'b"))
 	assert.Equal(t, "''''", StringLiteral("'"))
 }
+
+func TestJSONObjectKeyPathLiteral(t *testing.T) {
+	assert.Equal(t, "'$.http.route'", JSONObjectKeyPathLiteral("http.route"))
+	assert.Equal(t, "'$.a''b'", JSONObjectKeyPathLiteral("a'b"))
+}

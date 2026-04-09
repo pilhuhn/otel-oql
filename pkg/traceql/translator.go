@@ -151,7 +151,7 @@ func (t *Translator) translateCondition(condition Condition) (string, error) {
 func (t *Translator) translateFieldExpr(field FieldExpr) (string, error) {
 	switch field.Type {
 	case "intrinsic":
-		return t.getIntrinsicColumn(field.Name), nil
+		return t.getIntrinsicColumn(field.Name)
 
 	case "span":
 		return t.getSpanAttributeColumn(field.Name), nil
@@ -164,9 +164,9 @@ func (t *Translator) translateFieldExpr(field FieldExpr) (string, error) {
 	}
 }
 
-// getIntrinsicColumn maps intrinsic field names to native columns
-func (t *Translator) getIntrinsicColumn(name string) string {
-	// Map TraceQL intrinsic fields to Pinot columns
+// getIntrinsicColumn maps intrinsic field names to native columns.
+func (t *Translator) getIntrinsicColumn(name string) (string, error) {
+	name = strings.ToLower(strings.TrimSpace(name))
 	intrinsicMap := map[string]string{
 		"duration": "duration",
 		"name":     "name",
@@ -177,11 +177,10 @@ func (t *Translator) getIntrinsicColumn(name string) string {
 	}
 
 	if column, ok := intrinsicMap[name]; ok {
-		return column
+		return column, nil
 	}
 
-	// Unknown intrinsic field - shouldn't happen if parser is correct
-	return name
+	return "", fmt.Errorf("unknown intrinsic field %q", name)
 }
 
 // getSpanAttributeColumn maps span attribute names to native columns or JSON extraction
@@ -209,7 +208,7 @@ func (t *Translator) getSpanAttributeColumn(attrName string) string {
 	// Not a native column - use JSON extraction
 	// Convert dotted attribute name to JSON path
 	// Example: custom.field.name → $.custom.field.name
-	return fmt.Sprintf("JSON_EXTRACT_SCALAR(attributes, '$.%s', 'STRING')", attrName)
+	return fmt.Sprintf("JSON_EXTRACT_SCALAR(attributes, %s, 'STRING')", sqlutil.JSONObjectKeyPathLiteral(attrName))
 }
 
 // getResourceAttributeColumn maps resource attribute names to native columns or JSON extraction
@@ -224,7 +223,7 @@ func (t *Translator) getResourceAttributeColumn(attrName string) string {
 	}
 
 	// Not a native column - use JSON extraction from resource_attributes
-	return fmt.Sprintf("JSON_EXTRACT_SCALAR(resource_attributes, '$.%s', 'STRING')", attrName)
+	return fmt.Sprintf("JSON_EXTRACT_SCALAR(resource_attributes, %s, 'STRING')", sqlutil.JSONObjectKeyPathLiteral(attrName))
 }
 
 // formatValue formats a value for SQL
@@ -333,8 +332,7 @@ func (t *Translator) translateAggregateExpr(expr *AggregateExpr) (string, error)
 func (t *Translator) translateGroupingField(field string) (string, error) {
 	// Parse the field string to determine type
 	if IsIntrinsic(field) {
-		// Intrinsic field like duration, name, status
-		return t.getIntrinsicColumn(field), nil
+		return t.getIntrinsicColumn(field)
 	}
 
 	if strings.HasPrefix(field, "span.") {

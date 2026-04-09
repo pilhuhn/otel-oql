@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/pilhuhn/otel-oql/pkg/observability"
@@ -81,6 +82,11 @@ func TestPrometheusLabelValues(t *testing.T) {
 			labelName: "job",
 			wantCol:   "job",
 		},
+		{
+			name:      "unknown label uses JSON not identifier",
+			labelName: "custom_attr",
+			wantCol:   "JSON_EXTRACT_SCALAR(attributes, '$.custom_attr', 'STRING')",
+		},
 	}
 
 	for _, tt := range tests {
@@ -95,11 +101,37 @@ func TestPrometheusLabelValues(t *testing.T) {
 				t.Error("Expected SQL query, got empty string")
 			}
 
-			// Check that the correct column is selected
 			expectedStart := "SELECT DISTINCT " + tt.wantCol
 			if len(sql) < len(expectedStart) || sql[:len(expectedStart)] != expectedStart {
 				t.Errorf("Expected SQL to start with %q, got: %s", expectedStart, sql)
 			}
 		})
+	}
+}
+
+func TestPrometheusLabelValuesSQLInjectionLabelNameNotIdentifier(t *testing.T) {
+	obs, _ := observability.New(context.Background(), observability.Config{
+		ServiceName: "test",
+		Enabled:     false,
+	})
+	defer obs.Shutdown(context.Background())
+
+	s := &Server{
+		pinotClient:      pinot.NewClient("http://localhost:9000"),
+		validator:        tenant.NewValidator(true),
+		obs:              obs,
+		debugQuery:       false,
+		debugTranslation: false,
+	}
+
+	sql := s.buildLabelValuesSQL(0, &PrometheusLabelValuesParams{
+		LabelName: "bad'); SELECT 1; --",
+		Limit:     5,
+	})
+	if !strings.HasPrefix(sql, "SELECT DISTINCT JSON_EXTRACT_SCALAR(attributes,") {
+		t.Fatalf("unknown label must use JSON_EXTRACT_SCALAR, not bare identifier: %s", sql)
+	}
+	if !strings.Contains(sql, "tenant_id = 0") {
+		t.Fatalf("expected tenant filter: %s", sql)
 	}
 }

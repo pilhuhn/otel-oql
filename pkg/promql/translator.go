@@ -134,7 +134,7 @@ func (t *Translator) translateVectorSelector(vs *parser.VectorSelector) (string,
 			if nativeColumn != "" {
 				labelColumns = append(labelColumns, nativeColumn)
 			} else {
-				labelColumns = append(labelColumns, fmt.Sprintf("JSON_EXTRACT_SCALAR(attributes, '$.%s', 'STRING')", matcher.Name))
+				labelColumns = append(labelColumns, fmt.Sprintf("JSON_EXTRACT_SCALAR(attributes, %s, 'STRING')", sqlutil.JSONObjectKeyPathLiteral(matcher.Name)))
 			}
 		}
 
@@ -261,7 +261,7 @@ func (t *Translator) translateLabelMatcher(matcher *labels.Matcher) (string, err
 		fieldRef = nativeColumn
 	} else {
 		// Use JSON extraction for attributes
-		fieldRef = fmt.Sprintf("JSON_EXTRACT_SCALAR(attributes, '$.%s', 'STRING')", labelName)
+		fieldRef = fmt.Sprintf("JSON_EXTRACT_SCALAR(attributes, %s, 'STRING')", sqlutil.JSONObjectKeyPathLiteral(labelName))
 	}
 
 	switch matcher.Type {
@@ -360,7 +360,7 @@ func (t *Translator) translateAggregate(ae *parser.AggregateExpr) (string, error
 			if nativeColumn != "" {
 				groupFields = append(groupFields, nativeColumn)
 			} else {
-				groupFields = append(groupFields, fmt.Sprintf("JSON_EXTRACT_SCALAR(attributes, '$.%s', 'STRING')", label))
+				groupFields = append(groupFields, fmt.Sprintf("JSON_EXTRACT_SCALAR(attributes, %s, 'STRING')", sqlutil.JSONObjectKeyPathLiteral(label)))
 			}
 		}
 		selectClause = strings.Join(groupFields, ", ") + ", " + aggFunc
@@ -559,10 +559,10 @@ func getNativeColumn(labelName string) string {
 		"service_name": "service_name",
 
 		// HTTP attributes
-		"method":        "http_method",
-		"status":        "http_status_code",
-		"status_code":   "http_status_code",
-		"route":         "http_route",
+		"method":      "http_method",
+		"status":      "http_status_code",
+		"status_code": "http_status_code",
+		"route":       "http_route",
 
 		// Host attributes
 		"host":      "host_name",

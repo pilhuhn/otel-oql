@@ -5,6 +5,34 @@ import (
 	"testing"
 )
 
+// TestTranslateSpanFilterExpr_UnknownIntrinsicRejectsSQLInjection documents a regression:
+// The parser only emits FieldExpr{Type:"intrinsic"} for names that pass IsIntrinsic, but a
+// manually constructed AST (tests, future code) could set an arbitrary Name. Previously
+// getIntrinsicColumn returned that string verbatim as SQL, enabling injection (e.g.
+// "trace_id) OR (1=1"). Translation must reject unknown intrinsic names.
+func TestTranslateSpanFilterExpr_UnknownIntrinsicRejectsSQLInjection(t *testing.T) {
+	trans := NewTranslator(0)
+	expr := &SpanFilterExpr{
+		Conditions: []Condition{
+			{
+				Field: FieldExpr{
+					Type: "intrinsic",
+					Name: "trace_id) OR (tenant_id = tenant_id",
+				},
+				Operator: "=",
+				Value:    int64(1),
+			},
+		},
+	}
+	_, err := trans.translateSpanFilterExpr(expr)
+	if err == nil {
+		t.Fatalf("expected error for unknown intrinsic name, got nil (unsafe: raw name would be spliced into SQL)")
+	}
+	if !strings.Contains(err.Error(), "unknown intrinsic") {
+		t.Fatalf("expected error to mention unknown intrinsic, got: %v", err)
+	}
+}
+
 func TestTranslator_IntrinsicFields(t *testing.T) {
 	tests := []struct {
 		name        string
