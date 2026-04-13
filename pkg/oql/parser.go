@@ -189,10 +189,15 @@ func (p *Parser) parseSingleCondition(s string) (Condition, error) {
 	return nil, fmt.Errorf("invalid condition: %s", s)
 }
 
-// parseValue parses a value (string, number, duration, boolean)
+// parseValue parses a value (string, number, duration, boolean, time expression)
 // Returns an error value if parsing fails for values that look like they should parse
 func (p *Parser) parseValue(s string) interface{} {
 	s = strings.TrimSpace(s)
+
+	// Check for time expressions (now(), now() - 1h, now() + 5m)
+	if strings.HasPrefix(s, "now()") {
+		return p.parseTimeExpression(s)
+	}
 
 	// Remove quotes for strings
 	if strings.HasPrefix(s, `"`) && strings.HasSuffix(s, `"`) {
@@ -231,6 +236,52 @@ func (p *Parser) parseValue(s string) interface{} {
 
 	// Default to string
 	return s
+}
+
+// parseTimeExpression parses time expressions like now(), now() - 1h, now() + 5m
+func (p *Parser) parseTimeExpression(s string) interface{} {
+	s = strings.TrimSpace(s)
+
+	// Simple case: just now()
+	if s == "now()" {
+		return &NowExpression{}
+	}
+
+	// Arithmetic case: now() +/- duration
+	if !strings.HasPrefix(s, "now()") {
+		return fmt.Sprintf("PARSE_ERROR: invalid time expression '%s'", s)
+	}
+
+	// Extract operator and offset
+	remainder := strings.TrimSpace(s[5:]) // Skip "now()"
+	if remainder == "" {
+		return &NowExpression{}
+	}
+
+	// Find the operator
+	var operator string
+	var offsetStr string
+
+	if strings.HasPrefix(remainder, "+") {
+		operator = "+"
+		offsetStr = strings.TrimSpace(remainder[1:])
+	} else if strings.HasPrefix(remainder, "-") {
+		operator = "-"
+		offsetStr = strings.TrimSpace(remainder[1:])
+	} else {
+		return fmt.Sprintf("PARSE_ERROR: invalid time expression '%s': expected + or - after now()", s)
+	}
+
+	// Validate the offset is a valid duration
+	if _, err := parseDuration(offsetStr); err != nil {
+		return fmt.Sprintf("PARSE_ERROR: invalid duration in time expression '%s': %v", s, err)
+	}
+
+	return &TimeArithmeticExpression{
+		Base:     &NowExpression{},
+		Operator: operator,
+		Offset:   offsetStr,
+	}
 }
 
 // hasTimeUnitSuffix checks if a string has a time unit suffix
@@ -528,7 +579,7 @@ func operationKeywords() []string {
 	result := []string{"|", "\n", ""}
 	for _, op := range ops {
 		result = append(result, " "+op+" ")
-		result = append(result, " "+op+"(")  // For functions like avg(, count(
+		result = append(result, " "+op+"(") // For functions like avg(, count(
 	}
 	return result
 }

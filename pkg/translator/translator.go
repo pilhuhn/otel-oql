@@ -196,6 +196,10 @@ func (t *Translator) translateFieldReference(field string) (string, error) {
 	if err := validatePlainIdentifier(field); err != nil {
 		return "", err
 	}
+	// Quote reserved keywords (timestamp is reserved in Pinot SQL)
+	if field == "timestamp" {
+		return `"timestamp"`, nil
+	}
 	return field, nil
 }
 
@@ -257,30 +261,30 @@ func (t *Translator) getNativeColumn(attributeKey string) string {
 	// Map of OTel semantic conventions to native columns
 	nativeColumns := map[string]string{
 		// Span attributes
-		"http.method":            "http_method",
-		"http.status_code":       "http_status_code",
-		"http.route":             "http_route",
-		"http.target":            "http_target",
-		"db.system":              "db_system",
-		"db.statement":           "db_statement",
-		"messaging.system":       "messaging_system",
-		"messaging.destination":  "messaging_destination",
-		"rpc.service":            "rpc_service",
-		"rpc.method":             "rpc_method",
-		"error":                  "error",
+		"http.method":           "http_method",
+		"http.status_code":      "http_status_code",
+		"http.route":            "http_route",
+		"http.target":           "http_target",
+		"db.system":             "db_system",
+		"db.statement":          "db_statement",
+		"messaging.system":      "messaging_system",
+		"messaging.destination": "messaging_destination",
+		"rpc.service":           "rpc_service",
+		"rpc.method":            "rpc_method",
+		"error":                 "error",
 
 		// Resource attributes (service.name is in both spans and metrics)
-		"service.name":           "service_name",
-		"host.name":              "host_name",
+		"service.name": "service_name",
+		"host.name":    "host_name",
 
 		// Metric attributes
-		"job":                    "job",
-		"instance":               "instance",
-		"environment":            "environment",
+		"job":         "job",
+		"instance":    "instance",
+		"environment": "environment",
 
 		// Log attributes
-		"log.level":              "log_level",
-		"log.source":             "log_source",
+		"log.level":  "log_level",
+		"log.source": "log_source",
 	}
 
 	if nativeCol, ok := nativeColumns[attributeKey]; ok {
@@ -293,6 +297,10 @@ func (t *Translator) getNativeColumn(attributeKey string) string {
 // formatValue formats a value for SQL
 func (t *Translator) formatValue(value interface{}) string {
 	switch v := value.(type) {
+	case *oql.NowExpression:
+		return "now()"
+	case *oql.TimeArithmeticExpression:
+		return t.formatTimeArithmetic(v)
 	case string:
 		return sqlutil.StringLiteral(v)
 	case int, int64, int32:
@@ -310,6 +318,37 @@ func (t *Translator) formatValue(value interface{}) string {
 	default:
 		return sqlutil.StringLiteral(fmt.Sprintf("%v", v))
 	}
+}
+
+// formatTimeArithmetic formats time arithmetic expressions (e.g., now() - 1h)
+func (t *Translator) formatTimeArithmetic(expr *oql.TimeArithmeticExpression) string {
+	// Parse the offset duration
+	duration, err := time.ParseDuration(expr.Offset)
+	if err != nil {
+		// This should not happen since parser validates it, but handle gracefully
+		return fmt.Sprintf("'PARSE_ERROR: %v'", err)
+	}
+
+	// Convert to milliseconds (Pinot timestamp unit)
+	millis := duration.Milliseconds()
+
+	// Format the base expression
+	var base string
+	switch expr.Base.(type) {
+	case *oql.NowExpression:
+		base = "now()"
+	default:
+		base = "now()" // Default to now()
+	}
+
+	// Build the arithmetic expression
+	if expr.Operator == "-" {
+		return fmt.Sprintf("(%s - %d)", base, millis)
+	} else if expr.Operator == "+" {
+		return fmt.Sprintf("(%s + %d)", base, millis)
+	}
+
+	return base
 }
 
 // translateExpand translates an expand operation

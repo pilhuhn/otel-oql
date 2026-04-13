@@ -216,6 +216,95 @@ signal=spans between 2024-03-20 and 2024-03-21
 signal=logs between 2024-03-20T10:00:00 and 2024-03-20T11:00:00
 ```
 
+### 14. `now()` - Dynamic Time Expressions
+
+Use the `now()` function for dynamic time-based queries that automatically use the current timestamp at query execution time.
+
+**Basic Usage:**
+
+```oql
+# Get current spans
+signal=spans where timestamp > now()
+
+# Get spans from exactly now
+signal=spans where timestamp == now()
+```
+
+**Time Arithmetic:**
+
+Combine `now()` with `+` or `-` and duration values:
+
+```oql
+# Last hour of data
+signal=spans where timestamp > now() - 1h
+
+# Last 30 minutes
+signal=logs where timestamp >= now() - 30m
+
+# Last 5 seconds
+signal=metrics where timestamp > now() - 5s
+
+# Last 100 milliseconds
+signal=spans where timestamp >= now() - 100ms
+```
+
+**Time Ranges:**
+
+```oql
+# Recent time window (last hour to now)
+signal=spans where timestamp > now() - 1h and timestamp < now()
+
+# Between two relative times (2 hours ago to 1 hour ago)
+signal=logs where timestamp >= now() - 2h and timestamp <= now() - 1h
+```
+
+**Future Queries:**
+
+```oql
+# Events scheduled within the next hour
+signal=spans where timestamp < now() + 1h
+
+# Events between now and 5 minutes in the future
+signal=logs where timestamp >= now() and timestamp <= now() + 5m
+```
+
+**Combined with Other Conditions:**
+
+```oql
+# Recent errors (last 30 minutes)
+signal=spans where name == "checkout" and timestamp > now() - 30m
+
+# Recent high-severity logs
+signal=logs where log_level == "error" and timestamp > now() - 5m
+
+# OR condition with time filter
+signal=logs where log_level == "error" or timestamp > now() - 5m
+```
+
+**Supported Duration Units:**
+- `ns` - nanoseconds
+- `us` - microseconds
+- `ms` - milliseconds
+- `s` - seconds
+- `m` - minutes
+- `h` - hours
+
+**Complex Durations:**
+
+```oql
+# 1 hour and 30 minutes ago
+signal=spans where timestamp > now() - 1h30m
+
+# 2 hours, 15 minutes, and 30 seconds ago
+signal=logs where timestamp > now() - 2h15m30s
+```
+
+**Benefits of `now()`:**
+- **Dynamic**: Queries automatically update to current time
+- **Readable**: More intuitive than calculating timestamps
+- **Flexible**: Easily adjust time windows without recalculating
+- **Real-time**: Perfect for dashboards and monitoring
+
 ---
 
 ## Complete Examples
@@ -223,8 +312,11 @@ signal=logs between 2024-03-20T10:00:00 and 2024-03-20T11:00:00
 ### Example 1: Basic Latency Investigation
 
 ```oql
-# Find slow requests in the last hour
+# Find slow requests in the last hour (using since)
 signal=spans where duration > 1s since 1h limit 100
+
+# Or using now() for dynamic queries
+signal=spans where duration > 1s and timestamp > now() - 1h limit 100
 ```
 
 ### Example 2: Error Correlation
@@ -323,6 +415,28 @@ group by service_name
 count() as morning_requests
 ```
 
+### Example 11: Real-Time Monitoring with now()
+
+```oql
+# Dashboard query: Recent errors (auto-updating)
+signal=spans
+where http_status_code >= 500 and timestamp > now() - 5m
+sort timestamp desc
+limit 50
+
+# Active incidents (last 15 minutes)
+signal=logs
+where log_level == "error" and timestamp > now() - 15m
+group by service_name
+count() as error_count
+
+# Performance degradation detection
+signal=spans
+where duration > 1s and timestamp > now() - 10m
+group by http_route
+avg(duration) as avg_latency
+```
+
 ---
 
 ## Query Syntax Notes
@@ -352,6 +466,7 @@ signal=spans where duration > 500ms limit 100
 - **Durations**: Use suffixes `500ms`, `1s`, `5m`, `2h`
 - **Booleans**: `true`, `false`
 - **Timestamps**: ISO format `2024-03-20T10:00:00` or date `2024-03-20`
+- **Dynamic Time**: `now()`, `now() - 1h`, `now() + 5m` (current time with optional arithmetic)
 
 ---
 
@@ -417,12 +532,26 @@ signal=metrics where value > threshold get_exemplars() expand trace correlate lo
 
 ### Finding Error Patterns
 ```oql
+# Using since
 signal=spans where http_status_code >= 500 since 1h group by http_route count()
+
+# Using now() for real-time dashboards
+signal=spans where http_status_code >= 500 and timestamp > now() - 1h group by http_route count()
 ```
 
 ### Service Health Check
 ```oql
+# Using since
 signal=spans since 5m group by service_name avg(duration) as avg_latency
+
+# Using now() for auto-updating dashboards
+signal=spans where timestamp > now() - 5m group by service_name avg(duration) as avg_latency
+```
+
+### Recent Error Investigation
+```oql
+# Last 10 minutes of errors
+signal=logs where log_level == "error" and timestamp > now() - 10m sort timestamp desc limit 100
 ```
 
 ### Trace Forensics

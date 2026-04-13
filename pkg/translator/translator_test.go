@@ -884,3 +884,360 @@ func TestTranslator_WildcardPatternMatching(t *testing.T) {
 		})
 	}
 }
+
+func TestTranslator_NowExpression(t *testing.T) {
+	tests := []struct {
+		name        string
+		query       *oql.Query
+		wantContain string
+		description string
+	}{
+		{
+			name: "timestamp equals now()",
+			query: &oql.Query{
+				Signal: oql.SignalSpans,
+				Operations: []oql.Operation{
+					&oql.WhereOp{
+						Condition: &oql.BinaryCondition{
+							Left:     "timestamp",
+							Operator: "==",
+							Right:    &oql.NowExpression{},
+						},
+					},
+				},
+			},
+			wantContain: "\"timestamp\" = now()",
+			description: "now() should translate to Pinot now() function",
+		},
+		{
+			name: "timestamp > now()",
+			query: &oql.Query{
+				Signal: oql.SignalLogs,
+				Operations: []oql.Operation{
+					&oql.WhereOp{
+						Condition: &oql.BinaryCondition{
+							Left:     "timestamp",
+							Operator: ">",
+							Right:    &oql.NowExpression{},
+						},
+					},
+				},
+			},
+			wantContain: "\"timestamp\" > now()",
+			description: "greater than now() comparison",
+		},
+		{
+			name: "timestamp < now()",
+			query: &oql.Query{
+				Signal: oql.SignalMetrics,
+				Operations: []oql.Operation{
+					&oql.WhereOp{
+						Condition: &oql.BinaryCondition{
+							Left:     "timestamp",
+							Operator: "<",
+							Right:    &oql.NowExpression{},
+						},
+					},
+				},
+			},
+			wantContain: "\"timestamp\" < now()",
+			description: "less than now() comparison",
+		},
+		{
+			name: "timestamp >= now()",
+			query: &oql.Query{
+				Signal: oql.SignalSpans,
+				Operations: []oql.Operation{
+					&oql.WhereOp{
+						Condition: &oql.BinaryCondition{
+							Left:     "timestamp",
+							Operator: ">=",
+							Right:    &oql.NowExpression{},
+						},
+					},
+				},
+			},
+			wantContain: "\"timestamp\" >= now()",
+			description: "greater than or equal now() comparison",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			translator := NewTranslator(0)
+			sqls, err := translator.TranslateQuery(tt.query)
+			require.NoError(t, err, tt.description)
+			require.Len(t, sqls, 1)
+			assert.Contains(t, sqls[0], tt.wantContain, tt.description)
+		})
+	}
+}
+
+func TestTranslator_TimeArithmeticExpression(t *testing.T) {
+	tests := []struct {
+		name        string
+		query       *oql.Query
+		wantContain string
+		description string
+	}{
+		{
+			name: "now() - 1h",
+			query: &oql.Query{
+				Signal: oql.SignalSpans,
+				Operations: []oql.Operation{
+					&oql.WhereOp{
+						Condition: &oql.BinaryCondition{
+							Left:     "timestamp",
+							Operator: ">",
+							Right: &oql.TimeArithmeticExpression{
+								Base:     &oql.NowExpression{},
+								Operator: "-",
+								Offset:   "1h",
+							},
+						},
+					},
+				},
+			},
+			wantContain: "\"timestamp\" > (now() - 3600000)",
+			description: "1 hour = 3600000 milliseconds",
+		},
+		{
+			name: "now() - 30m",
+			query: &oql.Query{
+				Signal: oql.SignalLogs,
+				Operations: []oql.Operation{
+					&oql.WhereOp{
+						Condition: &oql.BinaryCondition{
+							Left:     "timestamp",
+							Operator: ">=",
+							Right: &oql.TimeArithmeticExpression{
+								Base:     &oql.NowExpression{},
+								Operator: "-",
+								Offset:   "30m",
+							},
+						},
+					},
+				},
+			},
+			wantContain: "\"timestamp\" >= (now() - 1800000)",
+			description: "30 minutes = 1800000 milliseconds",
+		},
+		{
+			name: "now() - 5s",
+			query: &oql.Query{
+				Signal: oql.SignalMetrics,
+				Operations: []oql.Operation{
+					&oql.WhereOp{
+						Condition: &oql.BinaryCondition{
+							Left:     "timestamp",
+							Operator: ">",
+							Right: &oql.TimeArithmeticExpression{
+								Base:     &oql.NowExpression{},
+								Operator: "-",
+								Offset:   "5s",
+							},
+						},
+					},
+				},
+			},
+			wantContain: "\"timestamp\" > (now() - 5000)",
+			description: "5 seconds = 5000 milliseconds",
+		},
+		{
+			name: "now() - 100ms",
+			query: &oql.Query{
+				Signal: oql.SignalSpans,
+				Operations: []oql.Operation{
+					&oql.WhereOp{
+						Condition: &oql.BinaryCondition{
+							Left:     "timestamp",
+							Operator: ">=",
+							Right: &oql.TimeArithmeticExpression{
+								Base:     &oql.NowExpression{},
+								Operator: "-",
+								Offset:   "100ms",
+							},
+						},
+					},
+				},
+			},
+			wantContain: "\"timestamp\" >= (now() - 100)",
+			description: "100 milliseconds",
+		},
+		{
+			name: "now() + 1h (future)",
+			query: &oql.Query{
+				Signal: oql.SignalSpans,
+				Operations: []oql.Operation{
+					&oql.WhereOp{
+						Condition: &oql.BinaryCondition{
+							Left:     "timestamp",
+							Operator: "<",
+							Right: &oql.TimeArithmeticExpression{
+								Base:     &oql.NowExpression{},
+								Operator: "+",
+								Offset:   "1h",
+							},
+						},
+					},
+				},
+			},
+			wantContain: "\"timestamp\" < (now() + 3600000)",
+			description: "future time: now() + 1 hour",
+		},
+		{
+			name: "now() + 5m (future)",
+			query: &oql.Query{
+				Signal: oql.SignalLogs,
+				Operations: []oql.Operation{
+					&oql.WhereOp{
+						Condition: &oql.BinaryCondition{
+							Left:     "timestamp",
+							Operator: "<=",
+							Right: &oql.TimeArithmeticExpression{
+								Base:     &oql.NowExpression{},
+								Operator: "+",
+								Offset:   "5m",
+							},
+						},
+					},
+				},
+			},
+			wantContain: "\"timestamp\" <= (now() + 300000)",
+			description: "future time: now() + 5 minutes",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			translator := NewTranslator(0)
+			sqls, err := translator.TranslateQuery(tt.query)
+			require.NoError(t, err, tt.description)
+			require.Len(t, sqls, 1)
+			assert.Contains(t, sqls[0], tt.wantContain, tt.description)
+		})
+	}
+}
+
+func TestTranslator_ComplexTimeQueries(t *testing.T) {
+	tests := []struct {
+		name         string
+		query        *oql.Query
+		wantContains []string
+		description  string
+	}{
+		{
+			name: "time range: now() - 1h to now()",
+			query: &oql.Query{
+				Signal: oql.SignalSpans,
+				Operations: []oql.Operation{
+					&oql.WhereOp{
+						Condition: &oql.AndCondition{
+							Conditions: []oql.Condition{
+								&oql.BinaryCondition{
+									Left:     "timestamp",
+									Operator: ">",
+									Right: &oql.TimeArithmeticExpression{
+										Base:     &oql.NowExpression{},
+										Operator: "-",
+										Offset:   "1h",
+									},
+								},
+								&oql.BinaryCondition{
+									Left:     "timestamp",
+									Operator: "<",
+									Right:    &oql.NowExpression{},
+								},
+							},
+						},
+					},
+				},
+			},
+			wantContains: []string{
+				"\"timestamp\" > (now() - 3600000)",
+				"\"timestamp\" < now()",
+			},
+			description: "time range from 1 hour ago to now",
+		},
+		{
+			name: "combined with other conditions",
+			query: &oql.Query{
+				Signal: oql.SignalSpans,
+				Operations: []oql.Operation{
+					&oql.WhereOp{
+						Condition: &oql.AndCondition{
+							Conditions: []oql.Condition{
+								&oql.BinaryCondition{
+									Left:     "name",
+									Operator: "==",
+									Right:    "checkout",
+								},
+								&oql.BinaryCondition{
+									Left:     "timestamp",
+									Operator: ">",
+									Right: &oql.TimeArithmeticExpression{
+										Base:     &oql.NowExpression{},
+										Operator: "-",
+										Offset:   "30m",
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			wantContains: []string{
+				"name = 'checkout'",
+				"\"timestamp\" > (now() - 1800000)",
+			},
+			description: "name filter combined with time range",
+		},
+		{
+			name: "or condition with time",
+			query: &oql.Query{
+				Signal: oql.SignalLogs,
+				Operations: []oql.Operation{
+					&oql.WhereOp{
+						Condition: &oql.OrCondition{
+							Conditions: []oql.Condition{
+								&oql.BinaryCondition{
+									Left:     "log_level",
+									Operator: "==",
+									Right:    "error",
+								},
+								&oql.BinaryCondition{
+									Left:     "timestamp",
+									Operator: ">",
+									Right: &oql.TimeArithmeticExpression{
+										Base:     &oql.NowExpression{},
+										Operator: "-",
+										Offset:   "5m",
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			wantContains: []string{
+				"log_level = 'error'",
+				"\"timestamp\" > (now() - 300000)",
+				" OR ",
+			},
+			description: "error logs OR recent logs within 5 minutes",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			translator := NewTranslator(0)
+			sqls, err := translator.TranslateQuery(tt.query)
+			require.NoError(t, err, tt.description)
+			require.Len(t, sqls, 1)
+
+			for _, want := range tt.wantContains {
+				assert.Contains(t, sqls[0], want, tt.description)
+			}
+		})
+	}
+}

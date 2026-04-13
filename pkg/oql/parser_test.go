@@ -827,3 +827,229 @@ func TestHasTimeUnitSuffix(t *testing.T) {
 		})
 	}
 }
+
+func TestParser_NowExpression(t *testing.T) {
+	tests := []struct {
+		name          string
+		query         string
+		expectedType  interface{}
+		expectedField string
+		expectedOp    string
+	}{
+		{
+			name:          "now() equals comparison",
+			query:         "signal=spans | where timestamp == now()",
+			expectedType:  &NowExpression{},
+			expectedField: "timestamp",
+			expectedOp:    "==",
+		},
+		{
+			name:          "now() greater than",
+			query:         "signal=logs | where timestamp > now()",
+			expectedType:  &NowExpression{},
+			expectedField: "timestamp",
+			expectedOp:    ">",
+		},
+		{
+			name:          "now() less than",
+			query:         "signal=metrics | where timestamp < now()",
+			expectedType:  &NowExpression{},
+			expectedField: "timestamp",
+			expectedOp:    "<",
+		},
+		{
+			name:          "now() greater than or equal",
+			query:         "signal=spans | where timestamp >= now()",
+			expectedType:  &NowExpression{},
+			expectedField: "timestamp",
+			expectedOp:    ">=",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			parser := NewParser(tt.query)
+			result, err := parser.Parse()
+			require.NoError(t, err)
+			require.Len(t, result.Operations, 1)
+
+			whereOp := result.Operations[0].(*WhereOp)
+			binCond := whereOp.Condition.(*BinaryCondition)
+			assert.Equal(t, tt.expectedField, binCond.Left)
+			assert.Equal(t, tt.expectedOp, binCond.Operator)
+			assert.IsType(t, tt.expectedType, binCond.Right)
+		})
+	}
+}
+
+func TestParser_TimeArithmeticExpression(t *testing.T) {
+	tests := []struct {
+		name             string
+		query            string
+		expectedField    string
+		expectedOp       string
+		expectedOperator string
+		expectedOffset   string
+	}{
+		{
+			name:             "now() - 1h",
+			query:            "signal=spans | where timestamp > now() - 1h",
+			expectedField:    "timestamp",
+			expectedOp:       ">",
+			expectedOperator: "-",
+			expectedOffset:   "1h",
+		},
+		{
+			name:             "now() - 30m",
+			query:            "signal=logs | where timestamp >= now() - 30m",
+			expectedField:    "timestamp",
+			expectedOp:       ">=",
+			expectedOperator: "-",
+			expectedOffset:   "30m",
+		},
+		{
+			name:             "now() - 5s",
+			query:            "signal=metrics | where timestamp > now() - 5s",
+			expectedField:    "timestamp",
+			expectedOp:       ">",
+			expectedOperator: "-",
+			expectedOffset:   "5s",
+		},
+		{
+			name:             "now() - 100ms",
+			query:            "signal=spans | where timestamp >= now() - 100ms",
+			expectedField:    "timestamp",
+			expectedOp:       ">=",
+			expectedOperator: "-",
+			expectedOffset:   "100ms",
+		},
+		{
+			name:             "now() + 1h (future)",
+			query:            "signal=spans | where timestamp < now() + 1h",
+			expectedField:    "timestamp",
+			expectedOp:       "<",
+			expectedOperator: "+",
+			expectedOffset:   "1h",
+		},
+		{
+			name:             "now() + 5m (future)",
+			query:            "signal=logs | where timestamp <= now() + 5m",
+			expectedField:    "timestamp",
+			expectedOp:       "<=",
+			expectedOperator: "+",
+			expectedOffset:   "5m",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			parser := NewParser(tt.query)
+			result, err := parser.Parse()
+			require.NoError(t, err)
+			require.Len(t, result.Operations, 1)
+
+			whereOp := result.Operations[0].(*WhereOp)
+			binCond := whereOp.Condition.(*BinaryCondition)
+			assert.Equal(t, tt.expectedField, binCond.Left)
+			assert.Equal(t, tt.expectedOp, binCond.Operator)
+
+			// Check that it's a TimeArithmeticExpression
+			timeArith, ok := binCond.Right.(*TimeArithmeticExpression)
+			require.True(t, ok, "Expected TimeArithmeticExpression")
+			assert.Equal(t, tt.expectedOperator, timeArith.Operator)
+			assert.Equal(t, tt.expectedOffset, timeArith.Offset)
+			assert.IsType(t, &NowExpression{}, timeArith.Base)
+		})
+	}
+}
+
+func TestParser_TimeExpressionEdgeCases(t *testing.T) {
+	tests := []struct {
+		name          string
+		query         string
+		shouldError   bool
+		containsError string
+	}{
+		{
+			name:        "valid now() without spaces",
+			query:       "signal=spans | where timestamp > now()",
+			shouldError: false,
+		},
+		{
+			name:        "valid now() with spaces in arithmetic",
+			query:       "signal=spans | where timestamp > now() - 1h",
+			shouldError: false,
+		},
+		{
+			name:        "valid now() - complex duration",
+			query:       "signal=spans | where timestamp > now() - 1h30m",
+			shouldError: false,
+		},
+		{
+			name:          "invalid duration in arithmetic",
+			query:         "signal=spans | where timestamp > now() - xyz",
+			shouldError:   false, // Parser succeeds but value contains error
+			containsError: "PARSE_ERROR",
+		},
+		{
+			name:          "missing operator in arithmetic",
+			query:         "signal=spans | where timestamp > now() 1h",
+			shouldError:   false,
+			containsError: "PARSE_ERROR",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			parser := NewParser(tt.query)
+			result, err := parser.Parse()
+
+			if tt.shouldError {
+				assert.Error(t, err)
+			} else {
+				require.NoError(t, err)
+
+				if tt.containsError != "" {
+					whereOp := result.Operations[0].(*WhereOp)
+					binCond := whereOp.Condition.(*BinaryCondition)
+					valueStr := fmt.Sprintf("%v", binCond.Right)
+					assert.Contains(t, valueStr, tt.containsError)
+				}
+			}
+		})
+	}
+}
+
+func TestParser_ComplexTimeQueries(t *testing.T) {
+	tests := []struct {
+		name  string
+		query string
+	}{
+		{
+			name:  "time range with now() and duration",
+			query: "signal=spans | where timestamp > now() - 1h and timestamp < now()",
+		},
+		{
+			name:  "time range with two arithmetic expressions",
+			query: "signal=logs | where timestamp >= now() - 24h and timestamp <= now() - 1h",
+		},
+		{
+			name:  "combined with other conditions",
+			query: "signal=spans | where name == \"checkout\" and timestamp > now() - 30m",
+		},
+		{
+			name:  "or condition with time",
+			query: "signal=logs | where level == \"error\" or timestamp > now() - 5m",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			parser := NewParser(tt.query)
+			result, err := parser.Parse()
+			require.NoError(t, err)
+			assert.NotNil(t, result)
+			assert.NotEmpty(t, result.Operations)
+		})
+	}
+}
