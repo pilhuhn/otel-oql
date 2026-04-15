@@ -16,6 +16,15 @@ import (
 
 const version = "1.0.0"
 
+const banner = `
+  ___ _____ ___ _        ___   ___  _
+ / _ \_   _| __| |      / _ \ / _ \| |
+| (_) || | | _|| |_____| (_) | (_) | |___
+ \___/ |_| |___|_____|  \___/ \__\_\_____|
+
+  Observability Query Language
+`
+
 // QueryRequest represents a query request
 type QueryRequest struct {
 	Query string `json:"query"`
@@ -80,7 +89,7 @@ func main() {
 	flag.Parse()
 
 	if *showVersion {
-		fmt.Printf("oql-cli version %s\n", version)
+		printVersionInfo()
 		os.Exit(0)
 	}
 
@@ -104,7 +113,8 @@ func main() {
 
 // runInteractiveMode runs the CLI in interactive REPL mode
 func runInteractiveMode(endpoint, tenantID string, verbose, jsonOutput, allFields bool) {
-	fmt.Fprintf(os.Stderr, "OQL Interactive Shell\n")
+	printBanner()
+	fmt.Fprintf(os.Stderr, "Interactive Shell\n")
 	fmt.Fprintf(os.Stderr, "  Type 'help' for query examples\n")
 	fmt.Fprintf(os.Stderr, "  Type 'print #N' to show details of row N\n")
 	fmt.Fprintf(os.Stderr, "  Type 'focus #N' to focus on a trace or span\n")
@@ -475,6 +485,18 @@ func readQueryInteractive() string {
 
 		return query
 	}
+}
+
+// printBanner prints the ASCII art banner and version (for interactive mode)
+func printBanner() {
+	fmt.Fprintf(os.Stderr, "%s", banner)
+	fmt.Fprintf(os.Stderr, "  Version %s\n\n", version)
+}
+
+// printVersionInfo prints banner and version to stdout (for --version flag)
+func printVersionInfo() {
+	fmt.Printf("%s", banner)
+	fmt.Printf("  Version %s\n", version)
 }
 
 // showHelp displays OQL syntax help and examples
