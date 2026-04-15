@@ -89,7 +89,7 @@ func main() {
 	flag.Parse()
 
 	if *showVersion {
-		printBanner()
+		printVersionInfo()
 		os.Exit(0)
 	}
 
@@ -487,10 +487,16 @@ func readQueryInteractive() string {
 	}
 }
 
-// printBanner prints the ASCII art banner and version
+// printBanner prints the ASCII art banner and version (for interactive mode)
 func printBanner() {
 	fmt.Fprintf(os.Stderr, "%s", banner)
 	fmt.Fprintf(os.Stderr, "  Version %s\n\n", version)
+}
+
+// printVersionInfo prints banner and version to stdout (for --version flag)
+func printVersionInfo() {
+	fmt.Printf("%s", banner)
+	fmt.Printf("  Version %s\n", version)
 }
 
 // showHelp displays OQL syntax help and examples
