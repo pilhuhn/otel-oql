@@ -140,7 +140,6 @@ services:
 
   perses:
     image: persesdev/perses:v0.53.1-debug
-    name: perses
     ports:
       - "8082:8080"
     volumes:
