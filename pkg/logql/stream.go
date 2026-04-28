@@ -14,7 +14,8 @@ import (
 // PromQL label selectors, so we can use the battle-tested Prometheus parser!
 func ParseStreamSelector(input string) (*StreamSelector, error) {
 	// Use Prometheus parser to parse the selector
-	expr, err := parser.ParseExpr(input)
+	promParser := parser.NewParser(parser.Options{})
+	expr, err := promParser.ParseExpr(input)
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse stream selector: %w", err)
 	}
@@ -43,7 +44,8 @@ func ParseStreamSelector(input string) (*StreamSelector, error) {
 // ParseStreamSelectorWithContext parses a stream selector and returns both
 // the selector and any metric name that was specified (for error messages)
 func ParseStreamSelectorWithContext(input string) (*StreamSelector, string, error) {
-	expr, err := parser.ParseExpr(input)
+	promParser := parser.NewParser(parser.Options{})
+	expr, err := promParser.ParseExpr(input)
 	if err != nil {
 		return nil, "", fmt.Errorf("failed to parse stream selector: %w", err)
 	}

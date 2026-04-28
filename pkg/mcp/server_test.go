@@ -206,14 +206,21 @@ func TestMCP_SDK_MissingArguments(t *testing.T) {
 	defer session.Close()
 
 	// Call oql_query without query argument
-	_, err = session.CallTool(ctx, &mcp.CallToolParams{
+	result, err := session.CallTool(ctx, &mcp.CallToolParams{
 		Name: "oql_query",
 		Arguments: map[string]any{
 			"tenant_id": 0,
 			// Missing "query" field
 		},
 	})
-	require.Error(t, err, "should return error for missing query")
+	require.NoError(t, err, "should not have transport error")
+	require.True(t, result.IsError, "should return validation error for missing query")
+	require.Greater(t, len(result.Content), 0, "should have error content")
+
+	// Check that the error message mentions the missing query field
+	textContent, ok := result.Content[0].(*mcp.TextContent)
+	require.True(t, ok, "error content should be text")
+	require.Contains(t, textContent.Text, "query", "error message should mention missing query field")
 }
 
 func TestMCP_SDK_OQLHelp(t *testing.T) {

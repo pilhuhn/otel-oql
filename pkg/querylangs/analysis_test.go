@@ -88,7 +88,8 @@ func TestPromQLParserCapabilities(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := parser.ParseExpr(tt.query)
+			p := parser.NewParser(parser.Options{})
+			_, err := p.ParseExpr(tt.query)
 			parsed := (err == nil)
 
 			t.Logf("Query: %s", tt.query)

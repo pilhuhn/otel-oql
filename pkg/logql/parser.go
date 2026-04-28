@@ -23,7 +23,8 @@ func NewParser(input string) *Parser {
 func (p *Parser) Parse() (*Query, error) {
 	// First try to parse with Prometheus parser to detect scalar arithmetic
 	// This handles connection tests like vector(1)+vector(1)
-	expr, err := parser.ParseExpr(p.input)
+	promParser := parser.NewParser(parser.Options{})
+	expr, err := promParser.ParseExpr(p.input)
 	if err == nil {
 		// Check if it's a scalar arithmetic expression
 		if scalarExpr, ok := p.tryParseScalarExpr(expr); ok {
@@ -81,7 +82,8 @@ func (p *Parser) parseLogRangeQuery() (*Query, error) {
 // This is possible because LogQL metric queries use PromQL-compatible syntax!
 func (p *Parser) parseMetricQuery() (*Query, error) {
 	// Try to parse with Prometheus parser first
-	expr, err := parser.ParseExpr(p.input)
+	promParser := parser.NewParser(parser.Options{})
+	expr, err := promParser.ParseExpr(p.input)
 	if err != nil {
 		// If PromQL parser fails, try our custom parsing
 		return p.parseMetricQueryCustom()

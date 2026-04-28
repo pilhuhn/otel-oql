@@ -49,7 +49,8 @@ func TestPrometheusParserBehavior(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			expr, err := parser.ParseExpr(tt.promql)
+			p := parser.NewParser(parser.Options{})
+			expr, err := p.ParseExpr(tt.promql)
 
 			if tt.wantError {
 				if err == nil {
@@ -117,7 +118,8 @@ func TestOffsetModifier(t *testing.T) {
 	translator := NewTranslator(0)
 
 	// Parse the query first to see what we get
-	expr, err := parser.ParseExpr("http_requests_total offset 5m")
+	p := parser.NewParser(parser.Options{})
+	expr, err := p.ParseExpr("http_requests_total offset 5m")
 	if err != nil {
 		t.Fatalf("Failed to parse: %v", err)
 	}

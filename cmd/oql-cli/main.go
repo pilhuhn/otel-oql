@@ -507,13 +507,15 @@ BASIC SYNTAX:
   signal=<type> [operations...]
 
 SIGNAL TYPES:
-  - spans, span, s, traces, trace, t   (trace data)
+  - spans, span, s                     (all spans - shows every span)
+  - traces, trace, t                   (traces - shows only root spans, one per trace)
   - metrics, metric, m                 (metrics data)
   - logs, log, l                       (log data)
 
 COMMON OPERATIONS:
   where <condition>              Filter by condition
   limit <n>                      Limit results to n rows
+  sort <field> [asc|desc]        Sort results (default: traces/logs by timestamp desc)
   expand trace                   Get all spans in the same trace (or just: expand, et)
   correlate <signals>            Find related logs/metrics/spans
   get_exemplars()                Extract trace IDs from metrics
@@ -536,7 +538,10 @@ COMMON FIELDS:
 
 EXAMPLES:
 
-  # Find slow spans (using time units)
+  # List traces (one row per trace, shows root span only)
+  signal=trace where service_name = "payment" limit 10
+
+  # Find slow spans (all spans, including children)
   signal=spans where duration > 1s limit 10
 
   # Find errors from a service
@@ -557,6 +562,9 @@ EXAMPLES:
   # Aggregate query
   signal=spans group by service_name | aggregate avg(duration)
 
+  # Sort by duration (slowest first)
+  signal=spans where duration > 100ms sort duration desc limit 10
+
   # Interactive workflow - investigate a specific trace
   signal=t | filter name="GET /tea"  # Get list of traces
   focus #3                            # Focus on trace from row 3
@@ -572,6 +580,8 @@ TIPS:
   - Strings need quotes: service_name = "payment"
   - Time units: duration > 5s, duration < 100ms (auto-converts to ns)
   - Supported units: s (seconds), ms (milliseconds), us (microseconds), ns (nanoseconds)
+  - signal=trace vs signal=spans: trace shows one row per trace (root span only), spans shows all
+  - Default ordering: traces/logs show newest first (by timestamp desc); use 'sort' to override
   - Abbreviations: 'expand' or 'et' instead of 'expand trace'
   - Interactive: Use 'print #N' to inspect rows, 'focus <traceid>' to set context
   - In REPL: type 'undo' to remove last refinement
