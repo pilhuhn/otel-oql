@@ -30,6 +30,14 @@ func (t *Translator) TranslateQuery(query *oql.Query) ([]string, error) {
 	tableName := t.getTableName(query.Signal)
 	sql := fmt.Sprintf("SELECT * FROM %s WHERE tenant_id = %d", tableName, t.tenantID)
 
+	// For signal=trace, filter to show only root spans (one row per trace)
+	if query.Signal == oql.SignalTraces {
+		sql += " AND (parent_span_id IS NULL OR parent_span_id = '' OR parent_span_id = '0' OR parent_span_id = '00000000000000000000000000000000')"
+	}
+
+	// Track if an explicit sort operation was provided
+	hasSortOp := false
+
 	// Process operations
 	for _, op := range query.Operations {
 		switch v := op.(type) {
@@ -44,6 +52,7 @@ func (t *Translator) TranslateQuery(query *oql.Query) ([]string, error) {
 			sql += fmt.Sprintf(" LIMIT %d", v.Count)
 
 		case *oql.SortOp:
+			hasSortOp = true
 			orderByClauses := make([]string, 0, len(v.Fields))
 			for _, field := range v.Fields {
 				direction := "ASC"
@@ -135,6 +144,14 @@ func (t *Translator) TranslateQuery(query *oql.Query) ([]string, error) {
 		}
 	}
 
+	// Add default ordering for event-based signals if no explicit sort was provided
+	// Only add for regular queries, not special marker queries (expand, correlate)
+	if !hasSortOp && !strings.Contains(sql, "__EXPAND_") && !strings.Contains(sql, "__CORRELATE__") {
+		if query.Signal == oql.SignalSpans || query.Signal == oql.SignalTraces || query.Signal == oql.SignalLogs {
+			sql += " ORDER BY \"timestamp\" DESC"
+		}
+	}
+
 	queries = append(queries, sql)
 	return queries, nil
 }
@@ -175,6 +192,19 @@ func (t *Translator) translateFieldReference(field string) (string, error) {
 	if field == "" {
 		return "", fmt.Errorf("empty field")
 	}
+
+	// Map field aliases to their canonical column names
+	// This allows users to use shorter display names (matching table headers) in queries
+	fieldAliases := map[string]string{
+		"service": "service_name", // Header shows "service" but column is "service_name"
+		"status":  "http_status_code",
+		"method":  "http_method",
+		"route":   "http_route",
+	}
+	if canonical, ok := fieldAliases[field]; ok {
+		field = canonical
+	}
+
 	if strings.Contains(field, ".") {
 		parts := strings.SplitN(field, ".", 2)
 		prefix := parts[0]
