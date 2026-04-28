@@ -25,7 +25,8 @@ func TestLogQLStreamSelectorReuse(t *testing.T) {
 
 	for _, query := range logQLStreamSelectors {
 		t.Run(query, func(t *testing.T) {
-			expr, err := parser.ParseExpr(query)
+			p := parser.NewParser(parser.Options{})
+			expr, err := p.ParseExpr(query)
 			if err != nil {
 				t.Fatalf("Failed to parse: %v", err)
 			}
@@ -62,7 +63,8 @@ func TestLogQLAggregationReuse(t *testing.T) {
 
 	for _, query := range logQLAggregations {
 		t.Run(query, func(t *testing.T) {
-			expr, err := parser.ParseExpr(query)
+			p := parser.NewParser(parser.Options{})
+			expr, err := p.ParseExpr(query)
 			if err != nil {
 				t.Fatalf("Failed to parse: %v", err)
 			}
@@ -259,7 +261,8 @@ func TestLabelMatcherCompatibility(t *testing.T) {
 
 		// Test if Prometheus parser handles it
 		testQuery := fmt.Sprintf("{test%s}", m.syntax)
-		_, err := parser.ParseExpr(testQuery)
+		p := parser.NewParser(parser.Options{})
+		_, err := p.ParseExpr(testQuery)
 		if err == nil {
 			t.Logf("  ✓ Prometheus parser accepts this")
 		} else {
@@ -274,7 +277,8 @@ func TestMatcherTypeMapping(t *testing.T) {
 	t.Log("=====================\n")
 
 	query := `{job="api", level=~"error|warn", status!="200"}`
-	expr, err := parser.ParseExpr(query)
+	p := parser.NewParser(parser.Options{})
+	expr, err := p.ParseExpr(query)
 	if err != nil {
 		t.Fatalf("Parse error: %v", err)
 	}
