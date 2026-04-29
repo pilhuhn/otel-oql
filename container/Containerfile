@@ -1,0 +1,27 @@
+FROM golang:1.26.2 as builder
+
+COPY go.mod go.sum otel-oql.yaml ./
+RUN go mod download
+
+COPY . .
+RUN go build -o /otel-oql ./cmd/otel-oql
+
+
+FROM registry.access.redhat.com/ubi9/ubi-micro
+WORKDIR /app
+USER 1000
+COPY /otel-oql.yaml /app/otel-oql.yaml
+COPY --from=builder /otel-oql /app/otel-oql
+
+# Pinot URL: http://localhost:9000
+# Kafka Brokers: localhost:9092
+ENV OTEL_OQL_MODE=all PINOT_URL=pinot:9000 KAFKA_BROKERS=kafka:9092
+
+# OTLP gRPC Port: 4317
+# OTLP HTTP Port: 4318
+# Query API Port: 8080
+# MCP Port: 8090
+EXPOSE 8080 8090 4317 4318
+
+
+CMD ["/app/otel-oql"]
