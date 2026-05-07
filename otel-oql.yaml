@@ -30,3 +30,9 @@ debug: false               # Enable all debug logging (overrides specific flags)
 debug_ingestion: false     # Debug logging for data ingestion (OTLP receivers)
 debug_query: false         # Debug logging for query execution (incoming queries)
 debug_translation: false   # Debug logging for query translation (OQL/PromQL/LogQL to SQL)
+
+# Startup validation
+# When enabled, the service will exit if Kafka/Pinot validation fails at startup
+# When disabled (default), warnings are logged but the service starts anyway
+# This allows services to start in any order in container orchestration (docker-compose, k8s)
+exit_on_failure: false     # Set to true to exit on dependency validation failure
