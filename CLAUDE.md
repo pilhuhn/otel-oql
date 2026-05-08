@@ -77,9 +77,12 @@ OTEL-OQL is a multi-tenant OpenTelemetry data ingestion and query service writte
 - Extract and validate `tenant-id` from incoming requests
 
 **Multi-Tenant Request Handler**:
-- Enforces tenant isolation by validating `tenant-id` property
-- Rejects requests without tenant-id (unless in test mode)
-- Test mode: sets default `tenant-id=0` for local development
+- **Authentication**: API key-based authentication (optional in test mode)
+  - Production: Validates Bearer token, looks up username → tenant_id mapping
+  - Test mode: Falls back to `tenant-id` header if no auth provided
+- Enforces tenant isolation by injecting tenant_id into request context
+- Rejects unauthenticated requests (unless in test mode)
+- Test mode: defaults to `tenant-id=0` for local development
 
 **Ingestion Pipeline**:
 - Transforms OTLP data to Pinot-compatible format
@@ -570,6 +573,14 @@ otel-oql/
 │   │   ├── grpc.go
 │   │   ├── http.go
 │   │   └── tenant.go
+│   ├── auth/                  # API key authentication
+│   │   ├── middleware.go      # HTTP/gRPC auth middleware
+│   │   ├── middleware_test.go # Authentication tests
+│   │   ├── integration_example_test.go
+│   │   └── tenant_conversion_test.go
+│   ├── userstore/             # User/tenant data storage
+│   │   ├── filestore.go       # CSV-based user store
+│   │   └── filestore_test.go  # Storage tests
 │   ├── ingestion/             # Data transformation pipeline
 │   │   ├── ingester.go        # Kafka producer
 │   │   └── attributes.go
@@ -634,7 +645,10 @@ otel-oql/
 ├── SCHEMA.md                  # Pinot schema documentation
 ├── PROMQL_TESTING.md          # PromQL testing documentation
 ├── QUERY_LANGUAGE_ANALYSIS.md # Language comparison analysis
+├── USER_MANAGEMENT.md         # Authentication and user management guide
 ├── otel-oql.yaml              # Example configuration
+├── users.csv                  # Example user-to-tenant mappings
+├── api-keys.csv               # Example API keys
 ├── compose.yml                # Podman compose setup
 └── go.mod
 ```

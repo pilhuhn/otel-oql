@@ -86,6 +86,52 @@ Configuration via environment variables or command-line flags:
 | `--otlp-http-port` | `OTLP_HTTP_PORT`     | `4318`                  | OTLP HTTP receiver port                        |
 | `--query-api-port` | `QUERY_API_PORT`     | `8080`                  | Query API server port                          |
 | `--test-mode`      | `TEST_MODE`          | `false`                 | Enable test mode (tenant-id=0)                 |
+| `--users-file`     | `USERS_FILE`         | `./users.csv`           | Path to user-to-tenant mapping file            |
+| `--api-keys-file`  | `API_KEYS_FILE`      | `./api-keys.csv`        | Path to API keys file                          |
+
+## Authentication
+
+OTEL-OQL supports API key-based authentication for multi-user/tenant access control:
+
+```bash
+# Create user files
+cat > users.csv <<EOF
+username,tenant_id
+alice,1
+bob,1
+charlie,2
+EOF
+
+cat > api-keys.csv <<EOF
+username,api_key
+alice,oql_key_alice_123456789abcdef
+bob,oql_key_bob_987654321fedcba
+charlie,oql_key_charlie_abcdef123456
+EOF
+
+# Start service (auth enabled automatically when files exist)
+./otel-oql
+
+# Make authenticated requests
+curl -H "Authorization: Bearer oql_key_alice_123456789abcdef" \
+  http://localhost:8080/query \
+  -d '{"query": "signal=spans | limit 10"}'
+```
+
+**Test Mode**: When `--test-mode` is enabled, authentication is optional and falls back to `tenant-id` headers:
+
+```bash
+# Test mode allows old-style tenant-id headers
+./otel-oql --test-mode
+curl -H "tenant-id: 0" http://localhost:8080/query -d '...'
+```
+
+See [USER_MANAGEMENT.md](USER_MANAGEMENT.md) for complete authentication documentation including:
+- Security best practices
+- API key generation
+- File formats and validation
+- Migration guide from tenant-id headers
+- Troubleshooting
 
 ## Grafana Integration
 
