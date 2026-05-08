@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"os"
 	"os/signal"
 	"runtime/debug"
@@ -10,12 +11,15 @@ import (
 
 	"github.com/pilhuhn/otel-oql/internal/config"
 	"github.com/pilhuhn/otel-oql/pkg/api"
+	"github.com/pilhuhn/otel-oql/pkg/auth"
 	"github.com/pilhuhn/otel-oql/pkg/ingestion"
 	"github.com/pilhuhn/otel-oql/pkg/mcp"
 	"github.com/pilhuhn/otel-oql/pkg/observability"
 	"github.com/pilhuhn/otel-oql/pkg/pinot"
 	"github.com/pilhuhn/otel-oql/pkg/receiver"
 	"github.com/pilhuhn/otel-oql/pkg/tenant"
+	"github.com/pilhuhn/otel-oql/pkg/userstore"
+	"google.golang.org/grpc"
 )
 
 func main() {
@@ -66,6 +70,41 @@ func run() error {
 	}
 }
 
+// initAuth initializes user store and auth middleware
+func initAuth(cfg *config.Config) (*auth.Middleware, error) {
+	// Check if user files exist
+	if _, err := os.Stat(cfg.UsersFile); os.IsNotExist(err) {
+		// In test mode, auth is optional
+		if cfg.TestMode {
+			fmt.Printf("Warning: Users file not found (%s), running in test mode without authentication\n", cfg.UsersFile)
+			return nil, nil
+		}
+		return nil, fmt.Errorf("users file not found: %s (create users.csv or enable test mode)", cfg.UsersFile)
+	}
+
+	if _, err := os.Stat(cfg.APIKeysFile); os.IsNotExist(err) {
+		if cfg.TestMode {
+			fmt.Printf("Warning: API keys file not found (%s), running in test mode without authentication\n", cfg.APIKeysFile)
+			return nil, nil
+		}
+		return nil, fmt.Errorf("API keys file not found: %s (create api-keys.csv or enable test mode)", cfg.APIKeysFile)
+	}
+
+	// Initialize user store
+	store, err := userstore.NewFileStore(cfg.UsersFile, cfg.APIKeysFile)
+	if err != nil {
+		return nil, fmt.Errorf("failed to initialize user store: %w", err)
+	}
+
+	fmt.Printf("Authentication enabled:\n")
+	fmt.Printf("  Users file: %s\n", cfg.UsersFile)
+	fmt.Printf("  API keys file: %s\n", cfg.APIKeysFile)
+
+	// Create auth middleware
+	authMiddleware := auth.NewMiddleware(store, cfg.TestMode)
+	return authMiddleware, nil
+}
+
 func runAllMode(ctx context.Context, cfg *config.Config) error {
 	fmt.Printf("Starting OTEL-OQL service (all-in-one mode)...\n")
 	fmt.Printf("Pinot URL: %s\n", cfg.PinotURL)
@@ -79,6 +118,12 @@ func runAllMode(ctx context.Context, cfg *config.Config) error {
 	if cfg.ObservabilityEnabled {
 		fmt.Printf("  Endpoint: %s\n", cfg.ObservabilityEndpoint)
 		fmt.Printf("  Tenant ID: %s\n", cfg.ObservabilityTenantID)
+	}
+
+	// Initialize authentication
+	authMiddleware, err := initAuth(cfg)
+	if err != nil {
+		return err
 	}
 
 	// Initialize observability (self-instrumentation)
@@ -97,8 +142,20 @@ func runAllMode(ctx context.Context, cfg *config.Config) error {
 	// Initialize Pinot client (for queries)
 	pinotClient := pinot.NewClient(cfg.PinotURL)
 
-	// Initialize tenant validator
-	validator := tenant.NewValidator(cfg.TestMode)
+	// Determine which middleware to use
+	var httpMiddleware func(http.Handler) http.Handler
+	var grpcUnaryInterceptor func(context.Context, interface{}, *grpc.UnaryServerInfo, grpc.UnaryHandler) (interface{}, error)
+
+	if authMiddleware != nil {
+		// Use auth middleware (production mode or test mode with user files)
+		httpMiddleware = authMiddleware.HTTPMiddleware
+		grpcUnaryInterceptor = authMiddleware.GRPCUnaryInterceptor()
+	} else {
+		// Fall back to tenant validator (test mode without user files)
+		validator := tenant.NewValidator(cfg.TestMode)
+		httpMiddleware = validator.HTTPMiddleware
+		grpcUnaryInterceptor = validator.GRPCUnaryInterceptor()
+	}
 
 	// Initialize ingester (with Kafka)
 	ingester, err := ingestion.NewIngester(cfg.KafkaBrokers, obs, cfg.DebugIngestion)
@@ -107,12 +164,12 @@ func runAllMode(ctx context.Context, cfg *config.Config) error {
 	}
 	defer ingester.Close()
 
-	// Initialize receivers
-	grpcReceiver := receiver.NewGRPCReceiver(cfg.OTLPGRPCPort, validator, ingester, obs, cfg.DebugIngestion)
-	httpReceiver := receiver.NewHTTPReceiver(cfg.OTLPHTTPPort, validator, ingester, obs, cfg.DebugIngestion)
+	// Initialize receivers with auth/tenant middleware
+	grpcReceiver := receiver.NewGRPCReceiver(cfg.OTLPGRPCPort, grpcUnaryInterceptor, ingester, obs, cfg.DebugIngestion)
+	httpReceiver := receiver.NewHTTPReceiver(cfg.OTLPHTTPPort, httpMiddleware, ingester, obs, cfg.DebugIngestion)
 
-	// Initialize query API server
-	queryServer := api.NewServer(cfg.QueryAPIPort, validator, pinotClient, obs, cfg.DebugQuery, cfg.DebugTranslation)
+	// Initialize query API server with auth/tenant middleware
+	queryServer := api.NewServer(cfg.QueryAPIPort, httpMiddleware, pinotClient, obs, cfg.DebugQuery, cfg.DebugTranslation)
 
 	// Initialize MCP server
 	mcpServer := mcp.NewServer(cfg.MCPPort, pinotClient)
@@ -181,6 +238,12 @@ func runIngestionMode(ctx context.Context, cfg *config.Config) error {
 		fmt.Printf("  Tenant ID: %s\n", cfg.ObservabilityTenantID)
 	}
 
+	// Initialize authentication
+	authMiddleware, err := initAuth(cfg)
+	if err != nil {
+		return err
+	}
+
 	// Initialize observability (self-instrumentation)
 	obs, err := observability.New(ctx, observability.Config{
 		ServiceName:    "otel-oql-ingestion",
@@ -194,8 +257,18 @@ func runIngestionMode(ctx context.Context, cfg *config.Config) error {
 	}
 	defer obs.Shutdown(ctx)
 
-	// Initialize tenant validator
-	validator := tenant.NewValidator(cfg.TestMode)
+	// Determine which middleware to use
+	var httpMiddleware func(http.Handler) http.Handler
+	var grpcUnaryInterceptor func(context.Context, interface{}, *grpc.UnaryServerInfo, grpc.UnaryHandler) (interface{}, error)
+
+	if authMiddleware != nil {
+		httpMiddleware = authMiddleware.HTTPMiddleware
+		grpcUnaryInterceptor = authMiddleware.GRPCUnaryInterceptor()
+	} else {
+		validator := tenant.NewValidator(cfg.TestMode)
+		httpMiddleware = validator.HTTPMiddleware
+		grpcUnaryInterceptor = validator.GRPCUnaryInterceptor()
+	}
 
 	// Initialize ingester (with Kafka)
 	ingester, err := ingestion.NewIngester(cfg.KafkaBrokers, obs, cfg.DebugIngestion)
@@ -204,9 +277,9 @@ func runIngestionMode(ctx context.Context, cfg *config.Config) error {
 	}
 	defer ingester.Close()
 
-	// Initialize receivers
-	grpcReceiver := receiver.NewGRPCReceiver(cfg.OTLPGRPCPort, validator, ingester, obs, cfg.DebugIngestion)
-	httpReceiver := receiver.NewHTTPReceiver(cfg.OTLPHTTPPort, validator, ingester, obs, cfg.DebugIngestion)
+	// Initialize receivers with auth/tenant middleware
+	grpcReceiver := receiver.NewGRPCReceiver(cfg.OTLPGRPCPort, grpcUnaryInterceptor, ingester, obs, cfg.DebugIngestion)
+	httpReceiver := receiver.NewHTTPReceiver(cfg.OTLPHTTPPort, httpMiddleware, ingester, obs, cfg.DebugIngestion)
 
 	// Start receivers
 	if err := grpcReceiver.Start(ctx); err != nil {
@@ -255,6 +328,12 @@ func runQueryMode(ctx context.Context, cfg *config.Config) error {
 		fmt.Printf("  Tenant ID: %s\n", cfg.ObservabilityTenantID)
 	}
 
+	// Initialize authentication
+	authMiddleware, err := initAuth(cfg)
+	if err != nil {
+		return err
+	}
+
 	// Initialize observability (self-instrumentation)
 	obs, err := observability.New(ctx, observability.Config{
 		ServiceName:    "otel-oql-query",
@@ -271,11 +350,18 @@ func runQueryMode(ctx context.Context, cfg *config.Config) error {
 	// Initialize Pinot client (for queries)
 	pinotClient := pinot.NewClient(cfg.PinotURL)
 
-	// Initialize tenant validator
-	validator := tenant.NewValidator(cfg.TestMode)
+	// Determine which middleware to use
+	var httpMiddleware func(http.Handler) http.Handler
 
-	// Initialize query API server
-	queryServer := api.NewServer(cfg.QueryAPIPort, validator, pinotClient, obs, cfg.DebugQuery, cfg.DebugTranslation)
+	if authMiddleware != nil {
+		httpMiddleware = authMiddleware.HTTPMiddleware
+	} else {
+		validator := tenant.NewValidator(cfg.TestMode)
+		httpMiddleware = validator.HTTPMiddleware
+	}
+
+	// Initialize query API server with auth/tenant middleware
+	queryServer := api.NewServer(cfg.QueryAPIPort, httpMiddleware, pinotClient, obs, cfg.DebugQuery, cfg.DebugTranslation)
 
 	// Initialize MCP server
 	mcpServer := mcp.NewServer(cfg.MCPPort, pinotClient)

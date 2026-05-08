@@ -18,7 +18,7 @@ import (
 // HTTPReceiver implements OTLP HTTP receiver
 type HTTPReceiver struct {
 	port           int
-	validator      *tenant.Validator
+	middleware     func(http.Handler) http.Handler
 	ingester       *ingestion.Ingester
 	server         *http.Server
 	obs            *observability.Observability
@@ -26,10 +26,10 @@ type HTTPReceiver struct {
 }
 
 // NewHTTPReceiver creates a new OTLP HTTP receiver
-func NewHTTPReceiver(port int, validator *tenant.Validator, ingester *ingestion.Ingester, obs *observability.Observability, debugIngestion bool) *HTTPReceiver {
+func NewHTTPReceiver(port int, middleware func(http.Handler) http.Handler, ingester *ingestion.Ingester, obs *observability.Observability, debugIngestion bool) *HTTPReceiver {
 	return &HTTPReceiver{
 		port:           port,
-		validator:      validator,
+		middleware:     middleware,
 		ingester:       ingester,
 		obs:            obs,
 		debugIngestion: debugIngestion,
@@ -40,10 +40,10 @@ func NewHTTPReceiver(port int, validator *tenant.Validator, ingester *ingestion.
 func (r *HTTPReceiver) Start(ctx context.Context) error {
 	mux := http.NewServeMux()
 
-	// Register OTLP endpoints with tenant validation middleware
-	mux.Handle("/v1/traces", r.validator.HTTPMiddleware(http.HandlerFunc(r.handleTraces)))
-	mux.Handle("/v1/metrics", r.validator.HTTPMiddleware(http.HandlerFunc(r.handleMetrics)))
-	mux.Handle("/v1/logs", r.validator.HTTPMiddleware(http.HandlerFunc(r.handleLogs)))
+	// Register OTLP endpoints with authentication middleware
+	mux.Handle("/v1/traces", r.middleware(http.HandlerFunc(r.handleTraces)))
+	mux.Handle("/v1/metrics", r.middleware(http.HandlerFunc(r.handleMetrics)))
+	mux.Handle("/v1/logs", r.middleware(http.HandlerFunc(r.handleLogs)))
 
 	r.server = &http.Server{
 		Addr:    fmt.Sprintf(":%d", r.port),

@@ -17,22 +17,22 @@ import (
 
 // GRPCReceiver implements OTLP gRPC receiver
 type GRPCReceiver struct {
-	port           int
-	validator      *tenant.Validator
-	ingester       *ingestion.Ingester
-	server         *grpc.Server
-	obs            *observability.Observability
-	debugIngestion bool
+	port              int
+	unaryInterceptor  grpc.UnaryServerInterceptor
+	ingester          *ingestion.Ingester
+	server            *grpc.Server
+	obs               *observability.Observability
+	debugIngestion    bool
 }
 
 // NewGRPCReceiver creates a new OTLP gRPC receiver
-func NewGRPCReceiver(port int, validator *tenant.Validator, ingester *ingestion.Ingester, obs *observability.Observability, debugIngestion bool) *GRPCReceiver {
+func NewGRPCReceiver(port int, unaryInterceptor grpc.UnaryServerInterceptor, ingester *ingestion.Ingester, obs *observability.Observability, debugIngestion bool) *GRPCReceiver {
 	return &GRPCReceiver{
-		port:           port,
-		validator:      validator,
-		ingester:       ingester,
-		obs:            obs,
-		debugIngestion: debugIngestion,
+		port:             port,
+		unaryInterceptor: unaryInterceptor,
+		ingester:         ingester,
+		obs:              obs,
+		debugIngestion:   debugIngestion,
 	}
 }
 
@@ -44,7 +44,7 @@ func (r *GRPCReceiver) Start(ctx context.Context) error {
 	}
 
 	r.server = grpc.NewServer(
-		grpc.UnaryInterceptor(r.validator.GRPCUnaryInterceptor()),
+		grpc.UnaryInterceptor(r.unaryInterceptor),
 	)
 
 	// Register OTLP services with separate handlers

@@ -22,7 +22,7 @@ import (
 // Server is the OQL query API server
 type Server struct {
 	port              int
-	validator         *tenant.Validator
+	middleware        func(http.Handler) http.Handler
 	pinotClient       *pinot.Client
 	httpServer        *http.Server
 	obs               *observability.Observability
@@ -31,10 +31,10 @@ type Server struct {
 }
 
 // NewServer creates a new query API server
-func NewServer(port int, validator *tenant.Validator, pinotClient *pinot.Client, obs *observability.Observability, debugQuery, debugTranslation bool) *Server {
+func NewServer(port int, middleware func(http.Handler) http.Handler, pinotClient *pinot.Client, obs *observability.Observability, debugQuery, debugTranslation bool) *Server {
 	return &Server{
 		port:             port,
-		validator:        validator,
+		middleware:       middleware,
 		pinotClient:      pinotClient,
 		obs:              obs,
 		debugQuery:       debugQuery,
@@ -46,29 +46,29 @@ func NewServer(port int, validator *tenant.Validator, pinotClient *pinot.Client,
 func (s *Server) Start(ctx context.Context) error {
 	mux := http.NewServeMux()
 
-	// OQL query endpoint with tenant validation
-	mux.Handle("/query", s.validator.HTTPMiddleware(http.HandlerFunc(s.handleQuery)))
+	// OQL query endpoint with authentication
+	mux.Handle("/query", s.middleware(http.HandlerFunc(s.handleQuery)))
 
 	// Prometheus-compatible endpoints
-	mux.Handle("/api/v1/query", s.validator.HTTPMiddleware(http.HandlerFunc(s.handlePrometheusQuery)))
-	mux.Handle("/api/v1/query_range", s.validator.HTTPMiddleware(http.HandlerFunc(s.handlePrometheusQueryRange)))
-	mux.Handle("/api/v1/labels", s.validator.HTTPMiddleware(http.HandlerFunc(s.handlePrometheusLabels)))
-	mux.HandleFunc("/api/v1/label/", s.validator.HTTPMiddleware(http.HandlerFunc(s.handlePrometheusLabelValues)).ServeHTTP)
+	mux.Handle("/api/v1/query", s.middleware(http.HandlerFunc(s.handlePrometheusQuery)))
+	mux.Handle("/api/v1/query_range", s.middleware(http.HandlerFunc(s.handlePrometheusQueryRange)))
+	mux.Handle("/api/v1/labels", s.middleware(http.HandlerFunc(s.handlePrometheusLabels)))
+	mux.HandleFunc("/api/v1/label/", s.middleware(http.HandlerFunc(s.handlePrometheusLabelValues)).ServeHTTP)
 
 	// Loki-compatible endpoints
-	mux.Handle("/loki/api/v1/query", s.validator.HTTPMiddleware(http.HandlerFunc(s.handleLokiQuery)))
-	mux.Handle("/loki/api/v1/query_range", s.validator.HTTPMiddleware(http.HandlerFunc(s.handleLokiQueryRange)))
-	mux.Handle("/loki/api/v1/labels", s.validator.HTTPMiddleware(http.HandlerFunc(s.handleLokiLabels)))
-	mux.HandleFunc("/loki/api/v1/label/", s.validator.HTTPMiddleware(http.HandlerFunc(s.handleLokiLabelValues)).ServeHTTP)
+	mux.Handle("/loki/api/v1/query", s.middleware(http.HandlerFunc(s.handleLokiQuery)))
+	mux.Handle("/loki/api/v1/query_range", s.middleware(http.HandlerFunc(s.handleLokiQueryRange)))
+	mux.Handle("/loki/api/v1/labels", s.middleware(http.HandlerFunc(s.handleLokiLabels)))
+	mux.HandleFunc("/loki/api/v1/label/", s.middleware(http.HandlerFunc(s.handleLokiLabelValues)).ServeHTTP)
 
 	// Tempo-compatible endpoints for TraceQL
 	mux.HandleFunc("/api/echo", s.handleTempoEcho) // Health check endpoint (no auth required)
-	mux.Handle("/api/search", s.validator.HTTPMiddleware(http.HandlerFunc(s.handleTempoV1Search))) // v1 search endpoint
-	mux.Handle("/api/v2/search", s.validator.HTTPMiddleware(http.HandlerFunc(s.handleTempoSearch)))
-	mux.Handle("/api/v2/search/tags", s.validator.HTTPMiddleware(http.HandlerFunc(s.handleTempoSearchTags)))
-	mux.HandleFunc("/api/v2/search/tag/", s.validator.HTTPMiddleware(http.HandlerFunc(s.handleTempoSearchTagValues)).ServeHTTP)
-	mux.HandleFunc("/api/traces/", s.validator.HTTPMiddleware(http.HandlerFunc(s.handleTempoTraceByID)).ServeHTTP) // v1 trace endpoint
-	mux.HandleFunc("/api/v2/traces/", s.validator.HTTPMiddleware(http.HandlerFunc(s.handleTempoTraceByID)).ServeHTTP) // v2 trace endpoint
+	mux.Handle("/api/search", s.middleware(http.HandlerFunc(s.handleTempoV1Search))) // v1 search endpoint
+	mux.Handle("/api/v2/search", s.middleware(http.HandlerFunc(s.handleTempoSearch)))
+	mux.Handle("/api/v2/search/tags", s.middleware(http.HandlerFunc(s.handleTempoSearchTags)))
+	mux.HandleFunc("/api/v2/search/tag/", s.middleware(http.HandlerFunc(s.handleTempoSearchTagValues)).ServeHTTP)
+	mux.HandleFunc("/api/traces/", s.middleware(http.HandlerFunc(s.handleTempoTraceByID)).ServeHTTP) // v1 trace endpoint
+	mux.HandleFunc("/api/v2/traces/", s.middleware(http.HandlerFunc(s.handleTempoTraceByID)).ServeHTTP) // v2 trace endpoint
 
 	s.httpServer = &http.Server{
 		Addr:    fmt.Sprintf(":%d", s.port),

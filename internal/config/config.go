@@ -25,6 +25,10 @@ type Config struct {
 	// Multi-tenancy
 	TestMode bool `yaml:"test_mode"` // If true, uses tenant-id=0 as default
 
+	// User/Tenant Management
+	UsersFile   string `yaml:"users_file"`    // Path to users.csv (username,tenant_id)
+	APIKeysFile string `yaml:"api_keys_file"` // Path to api-keys.csv (username,api_key)
+
 	// Query API
 	QueryAPIPort int `yaml:"query_api_port"`
 
@@ -64,6 +68,8 @@ func Load() (*Config, error) {
 	var mcpPort int
 	var mode string
 	var testMode bool
+	var usersFile string
+	var apiKeysFile string
 	var obsEnabled bool
 	var obsEndpoint string
 	var obsTenantID string
@@ -77,6 +83,8 @@ func Load() (*Config, error) {
 	flag.IntVar(&otlpGRPCPort, "otlp-grpc-port", 0, "OTLP gRPC receiver port")
 	flag.IntVar(&otlpHTTPPort, "otlp-http-port", 0, "OTLP HTTP receiver port")
 	flag.BoolVar(&testMode, "test-mode", false, "Enable test mode (default tenant-id=0)")
+	flag.StringVar(&usersFile, "users-file", "", "Path to users.csv file")
+	flag.StringVar(&apiKeysFile, "api-keys-file", "", "Path to api-keys.csv file")
 	flag.IntVar(&queryAPIPort, "query-api-port", 0, "Query API server port")
 	flag.IntVar(&mcpPort, "mcp-port", 0, "MCP server port")
 	flag.StringVar(&mode, "mode", "", "Operating mode: all, ingestion, or query (default: all)")
@@ -129,6 +137,12 @@ func Load() (*Config, error) {
 		if val, err := strconv.ParseBool(env); err == nil {
 			cfg.TestMode = val
 		}
+	}
+	if env := os.Getenv("USERS_FILE"); env != "" {
+		cfg.UsersFile = env
+	}
+	if env := os.Getenv("API_KEYS_FILE"); env != "" {
+		cfg.APIKeysFile = env
 	}
 	if env := os.Getenv("OBSERVABILITY_ENABLED"); env != "" {
 		if val, err := strconv.ParseBool(env); err == nil {
@@ -188,6 +202,13 @@ func Load() (*Config, error) {
 	if flag.Lookup("test-mode").Value.String() == "true" {
 		cfg.TestMode = true
 	}
+	// User files
+	if usersFile != "" {
+		cfg.UsersFile = usersFile
+	}
+	if apiKeysFile != "" {
+		cfg.APIKeysFile = apiKeysFile
+	}
 	// observability flags
 	if flag.Lookup("observability-enabled").Value.String() == "true" {
 		cfg.ObservabilityEnabled = true
@@ -240,6 +261,13 @@ func Load() (*Config, error) {
 	}
 	if cfg.Mode == "" {
 		cfg.Mode = "all" // Default to all-in-one mode
+	}
+	// User file defaults
+	if cfg.UsersFile == "" {
+		cfg.UsersFile = "./users.csv"
+	}
+	if cfg.APIKeysFile == "" {
+		cfg.APIKeysFile = "./api-keys.csv"
 	}
 	// Observability defaults
 	if cfg.ObservabilityEndpoint == "" {
