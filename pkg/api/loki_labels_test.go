@@ -24,7 +24,7 @@ func TestLokiLabels(t *testing.T) {
 
 	s := &Server{
 		pinotClient:      client,
-		validator:        validator,
+		middleware:       validator.HTTPMiddleware,
 		obs:              obs,
 		debugQuery:       false,
 		debugTranslation: false,
@@ -66,7 +66,7 @@ func TestLokiLabelValues(t *testing.T) {
 
 	s := &Server{
 		pinotClient:      client,
-		validator:        validator,
+		middleware:       validator.HTTPMiddleware,
 		obs:              obs,
 		debugQuery:       false,
 		debugTranslation: false,
@@ -136,9 +136,10 @@ func TestLokiLabelValuesSQLInjectionLabelNameNotIdentifier(t *testing.T) {
 	})
 	defer obs.Shutdown(context.Background())
 
+	validator := tenant.NewValidator(true)
 	s := &Server{
 		pinotClient:      pinot.NewClient("http://localhost:9000"),
-		validator:        tenant.NewValidator(true),
+		middleware:       validator.HTTPMiddleware,
 		obs:              obs,
 		debugQuery:       false,
 		debugTranslation: false,
