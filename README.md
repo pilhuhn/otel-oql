@@ -77,14 +77,15 @@ go build -o oql-cli ./cmd/oql-cli
 
 Configuration via environment variables or command-line flags:
 
-| Flag | Environment Variable | Default | Description |
-|------|---------------------|---------|-------------|
-| `--mode` | `OTEL_OQL_MODE` | `all` | Operating mode: `all`, `ingestion`, or `query` |
-| `--pinot-url` | `PINOT_URL` | `http://localhost:9000` | Pinot broker URL |
-| `--otlp-grpc-port` | `OTLP_GRPC_PORT` | `4317` | OTLP gRPC receiver port |
-| `--otlp-http-port` | `OTLP_HTTP_PORT` | `4318` | OTLP HTTP receiver port |
-| `--query-api-port` | `QUERY_API_PORT` | `8080` | Query API server port |
-| `--test-mode` | `TEST_MODE` | `false` | Enable test mode (tenant-id=0) |
+| Flag               | Environment Variable | Default                 | Description                                    |
+|--------------------|----------------------|-------------------------|------------------------------------------------|
+| `--mode`           | `OTEL_OQL_MODE`      | `all`                   | Operating mode: `all`, `ingestion`, or `query` |
+| `--pinot-url`      | `PINOT_URL`          | `http://localhost:9000` | Pinot broker URL                               |
+| `--kafka-brokers`  | `KAFKA_BROKERS`      | `localhost:9092`        | Kafka Broker URL                               | 
+| `--otlp-grpc-port` | `OTLP_GRPC_PORT`     | `4317`                  | OTLP gRPC receiver port                        |
+| `--otlp-http-port` | `OTLP_HTTP_PORT`     | `4318`                  | OTLP HTTP receiver port                        |
+| `--query-api-port` | `QUERY_API_PORT`     | `8080`                  | Query API server port                          |
+| `--test-mode`      | `TEST_MODE`          | `false`                 | Enable test mode (tenant-id=0)                 |
 
 ## Grafana Integration
 

@@ -33,7 +33,8 @@ func NewParser(input string) *Parser {
 func (p *Parser) Parse() (*Query, error) {
 	// First try to parse with Prometheus parser to detect scalar arithmetic
 	// This handles connection tests like 1+1
-	expr, err := parser.ParseExpr(p.lexer.input)
+	promParser := parser.NewParser(parser.Options{})
+	expr, err := promParser.ParseExpr(p.lexer.input)
 	if err == nil {
 		// Check if it's a scalar arithmetic expression
 		if scalarExpr, ok := p.tryParseScalarExpr(expr); ok {

@@ -16,6 +16,21 @@ import (
 
 const version = "1.0.0"
 
+// ANSI color codes for terminal output
+const (
+	colorReset  = "\033[0m"
+	colorRed    = "\033[31m"
+	colorYellow = "\033[33m"
+	colorGray   = "\033[90m"
+)
+
+// Error categories for better UX
+const (
+	errCategoryTransport = "transport" // CLI couldn't reach backend
+	errCategoryBackend   = "backend"   // Backend internal error (Pinot, SQL, etc.)
+	errCategoryQuery     = "query"     // User query syntax/validation error
+)
+
 // QueryRequest represents a query request
 type QueryRequest struct {
 	Query string `json:"query"`
@@ -199,11 +214,13 @@ func runInteractiveMode(endpoint, tenantID string, verbose, jsonOutput, allField
 			// Re-execute the previous query to show results
 			resp, err := executeQuery(endpoint, tenantID, lastQuery)
 			if err != nil {
-				fmt.Fprintf(os.Stderr, "Error: %v\n\n", err)
+				category := categorizeError(err, "")
+				fmt.Fprintf(os.Stderr, "%s\n\n", formatError(category, err.Error()))
 				continue
 			}
 			if resp.Error != "" {
-				fmt.Fprintf(os.Stderr, "Error: %s\n\n", resp.Error)
+				category := categorizeError(nil, resp.Error)
+				fmt.Fprintf(os.Stderr, "%s\n\n", formatError(category, resp.Error))
 				continue
 			}
 			if jsonOutput {
@@ -256,13 +273,15 @@ func runInteractiveMode(endpoint, tenantID string, verbose, jsonOutput, allField
 		// Execute query (no retry in interactive mode to avoid stdin conflicts)
 		resp, err := executeQuery(endpoint, tenantID, query)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error: %v\n\n", err)
+			category := categorizeError(err, "")
+			fmt.Fprintf(os.Stderr, "%s\n\n", formatError(category, err.Error()))
 			continue
 		}
 
 		// Handle error response
 		if resp.Error != "" {
-			fmt.Fprintf(os.Stderr, "Error: %s\n\n", resp.Error)
+			category := categorizeError(nil, resp.Error)
+			fmt.Fprintf(os.Stderr, "%s\n\n", formatError(category, resp.Error))
 			continue
 		}
 
@@ -393,13 +412,15 @@ func runSingleQuery(endpoint, tenantID string, verbose, jsonOutput, allFields bo
 	// Execute query with retry on error
 	resp, err := executeQueryWithRetry(endpoint, tenantID, query)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		category := categorizeError(err, "")
+		fmt.Fprintf(os.Stderr, "%s\n", formatError(category, err.Error()))
 		os.Exit(1)
 	}
 
 	// Handle error response
 	if resp.Error != "" {
-		fmt.Fprintf(os.Stderr, "Error: %s\n", resp.Error)
+		category := categorizeError(nil, resp.Error)
+		fmt.Fprintf(os.Stderr, "%s\n", formatError(category, resp.Error))
 		os.Exit(1)
 	}
 
@@ -507,13 +528,15 @@ BASIC SYNTAX:
   signal=<type> [operations...]
 
 SIGNAL TYPES:
-  - spans, span, s, traces, trace, t   (trace data)
+  - spans, span, s                     (all spans - shows every span)
+  - traces, trace, t                   (traces - shows only root spans, one per trace)
   - metrics, metric, m                 (metrics data)
   - logs, log, l                       (log data)
 
 COMMON OPERATIONS:
   where <condition>              Filter by condition
   limit <n>                      Limit results to n rows
+  sort <field> [asc|desc]        Sort results (default: traces/logs by timestamp desc)
   expand trace                   Get all spans in the same trace (or just: expand, et)
   correlate <signals>            Find related logs/metrics/spans
   get_exemplars()                Extract trace IDs from metrics
@@ -536,7 +559,10 @@ COMMON FIELDS:
 
 EXAMPLES:
 
-  # Find slow spans (using time units)
+  # List traces (one row per trace, shows root span only)
+  signal=trace where service_name = "payment" limit 10
+
+  # Find slow spans (all spans, including children)
   signal=spans where duration > 1s limit 10
 
   # Find errors from a service
@@ -557,6 +583,9 @@ EXAMPLES:
   # Aggregate query
   signal=spans group by service_name | aggregate avg(duration)
 
+  # Sort by duration (slowest first)
+  signal=spans where duration > 100ms sort duration desc limit 10
+
   # Interactive workflow - investigate a specific trace
   signal=t | filter name="GET /tea"  # Get list of traces
   focus #3                            # Focus on trace from row 3
@@ -572,6 +601,8 @@ TIPS:
   - Strings need quotes: service_name = "payment"
   - Time units: duration > 5s, duration < 100ms (auto-converts to ns)
   - Supported units: s (seconds), ms (milliseconds), us (microseconds), ns (nanoseconds)
+  - signal=trace vs signal=spans: trace shows one row per trace (root span only), spans shows all
+  - Default ordering: traces/logs show newest first (by timestamp desc); use 'sort' to override
   - Abbreviations: 'expand' or 'et' instead of 'expand trace'
   - Interactive: Use 'print #N' to inspect rows, 'focus <traceid>' to set context
   - In REPL: type 'undo' to remove last refinement
@@ -603,8 +634,9 @@ func executeQueryWithRetry(endpoint, tenantID, originalQuery string) (*QueryResp
 		}
 
 		// Print the error and suggestion
-		fmt.Fprintf(os.Stderr, "\nError: %s\n\n", resp.Error)
-		fmt.Fprintf(os.Stderr, "Suggestion: %s\n\n", suggestion)
+		category := categorizeError(nil, resp.Error)
+		fmt.Fprintf(os.Stderr, "\n%s\n\n", formatError(category, resp.Error))
+		fmt.Fprintf(os.Stderr, "%sSuggestion:%s %s\n\n", colorGray, colorReset, suggestion)
 		fmt.Fprintf(os.Stderr, "Try this instead? (y/n/edit): ")
 
 		// Read user input
@@ -656,7 +688,8 @@ func handleListCommand(endpoint, tenantID, input string) {
 		// List metric names (special case of label values for __name__)
 		values, err := fetchLabelValues(endpoint, tenantID, "__name__", 1000)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			category := categorizeError(err, "")
+			fmt.Fprintf(os.Stderr, "%s\n", formatError(category, err.Error()))
 			return
 		}
 		fmt.Println("\nAvailable metrics:")
@@ -669,7 +702,8 @@ func handleListCommand(endpoint, tenantID, input string) {
 		// List all labels
 		labels, err := fetchLabels(endpoint, tenantID)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			category := categorizeError(err, "")
+			fmt.Fprintf(os.Stderr, "%s\n", formatError(category, err.Error()))
 			return
 		}
 		fmt.Println("\nAvailable labels:")
@@ -688,7 +722,8 @@ func handleListCommand(endpoint, tenantID, input string) {
 		labelName := parts[2]
 		values, err := fetchLabelValues(endpoint, tenantID, labelName, 1000)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			category := categorizeError(err, "")
+			fmt.Fprintf(os.Stderr, "%s\n", formatError(category, err.Error()))
 			return
 		}
 		fmt.Printf("\nValues for label '%s':\n", labelName)
@@ -1329,6 +1364,66 @@ func printFormattedRowNumbered(rowNum int, columns []string, row []interface{}, 
 		fmt.Printf("%-*s", widths[i]+2, strVal)
 	}
 	fmt.Println()
+}
+
+// categorizeError determines the error category based on error message
+func categorizeError(err error, respError string) string {
+	// If it's a transport error (couldn't reach backend)
+	if err != nil {
+		return errCategoryTransport
+	}
+
+	// Backend returned an error - categorize based on content
+	lowerErr := strings.ToLower(respError)
+
+	// Query syntax/validation errors (user's fault)
+	queryErrorPatterns := []string{
+		"invalid signal type",
+		"invalid condition",
+		"query must start with",
+		"unknown operator",
+		"parse error",
+		"syntax error",
+		"expected",
+		"unexpected token",
+	}
+	for _, pattern := range queryErrorPatterns {
+		if strings.Contains(lowerErr, pattern) {
+			return errCategoryQuery
+		}
+	}
+
+	// Backend infrastructure errors (Pinot, SQL, etc.)
+	return errCategoryBackend
+}
+
+// formatError formats an error message with category prefix and color
+func formatError(category string, message string) string {
+	var prefix, color string
+
+	switch category {
+	case errCategoryTransport:
+		prefix = "Connection error"
+		color = colorRed
+	case errCategoryBackend:
+		prefix = "Backend error"
+		color = colorRed
+	case errCategoryQuery:
+		prefix = "Query error"
+		color = colorYellow
+	default:
+		prefix = "Error"
+		color = colorReset
+	}
+
+	// Check if stdout is a terminal (disable colors if piped)
+	stat, _ := os.Stdout.Stat()
+	isTTY := (stat.Mode() & os.ModeCharDevice) != 0
+
+	if isTTY {
+		return fmt.Sprintf("%s%s:%s %s", color, prefix, colorReset, message)
+	}
+	return fmt.Sprintf("%s: %s", prefix, message)
 }
 
 // executeQuery sends the query to the OTEL-OQL API

@@ -91,9 +91,9 @@ type SortField struct {
 
 // AggregateOp represents an aggregation operation
 type AggregateOp struct {
-	Function string   // avg, min, max, count, sum
-	Field    string   // field to aggregate (empty for count)
-	Alias    string   // optional alias for result
+	Function string // avg, min, max, count, sum
+	Field    string // field to aggregate (empty for count)
+	Alias    string // optional alias for result
 }
 
 func (AggregateOp) operation() {}
@@ -147,3 +147,22 @@ type OrCondition struct {
 }
 
 func (OrCondition) condition() {}
+
+// TimeExpression represents a time expression (e.g., now(), now() - 1h)
+type TimeExpression interface {
+	timeExpression()
+}
+
+// NowExpression represents the now() function
+type NowExpression struct{}
+
+func (NowExpression) timeExpression() {}
+
+// TimeArithmeticExpression represents arithmetic on time (e.g., now() - 1h)
+type TimeArithmeticExpression struct {
+	Base     TimeExpression // e.g., now()
+	Operator string         // + or -
+	Offset   string         // duration string (e.g., "1h")
+}
+
+func (TimeArithmeticExpression) timeExpression() {}

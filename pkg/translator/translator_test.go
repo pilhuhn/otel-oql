@@ -12,34 +12,44 @@ import (
 
 func TestTranslator_BasicQueryTranslation(t *testing.T) {
 	tests := []struct {
-		name          string
-		signal        oql.SignalType
-		tenantID      int
-		expectedTable string
+		name               string
+		signal             oql.SignalType
+		tenantID           int
+		expectedTable      string
+		expectOrdering     bool
+		expectRootFilter   bool
 	}{
 		{
-			name:          "spans signal",
-			signal:        oql.SignalSpans,
-			tenantID:      0,
-			expectedTable: "otel_spans",
+			name:             "spans signal",
+			signal:           oql.SignalSpans,
+			tenantID:         0,
+			expectedTable:    "otel_spans",
+			expectOrdering:   true,
+			expectRootFilter: false,
 		},
 		{
-			name:          "metrics signal",
-			signal:        oql.SignalMetrics,
-			tenantID:      1,
-			expectedTable: "otel_metrics",
+			name:             "metrics signal",
+			signal:           oql.SignalMetrics,
+			tenantID:         1,
+			expectedTable:    "otel_metrics",
+			expectOrdering:   false,
+			expectRootFilter: false,
 		},
 		{
-			name:          "logs signal",
-			signal:        oql.SignalLogs,
-			tenantID:      2,
-			expectedTable: "otel_logs",
+			name:             "logs signal",
+			signal:           oql.SignalLogs,
+			tenantID:         2,
+			expectedTable:    "otel_logs",
+			expectOrdering:   true,
+			expectRootFilter: false,
 		},
 		{
-			name:          "traces signal",
-			signal:        oql.SignalTraces,
-			tenantID:      3,
-			expectedTable: "otel_spans",
+			name:             "traces signal",
+			signal:           oql.SignalTraces,
+			tenantID:         3,
+			expectedTable:    "otel_spans",
+			expectOrdering:   true,
+			expectRootFilter: true,
 		},
 	}
 
@@ -56,6 +66,12 @@ func TestTranslator_BasicQueryTranslation(t *testing.T) {
 			require.Len(t, sqls, 1)
 
 			expectedSQL := fmt.Sprintf("SELECT * FROM %s WHERE tenant_id = %d", tt.expectedTable, tt.tenantID)
+			if tt.expectRootFilter {
+				expectedSQL += " AND (parent_span_id IS NULL OR parent_span_id = '' OR parent_span_id = '0' OR parent_span_id = '00000000000000000000000000000000')"
+			}
+			if tt.expectOrdering {
+				expectedSQL += " ORDER BY \"timestamp\" DESC"
+			}
 			assert.Equal(t, expectedSQL, sqls[0])
 		})
 	}
@@ -223,6 +239,68 @@ func TestTranslator_WhereWithNonDottedField(t *testing.T) {
 	// Should use field name directly
 	assert.Contains(t, sqls[0], "trace_id = 'test-trace-123'")
 	assert.NotContains(t, sqls[0], "JSON_EXTRACT")
+}
+
+func TestTranslator_FieldAliases(t *testing.T) {
+	tests := []struct {
+		name          string
+		aliasField    string
+		canonicalField string
+		value         string
+	}{
+		{
+			name:          "service alias",
+			aliasField:    "service",
+			canonicalField: "service_name",
+			value:         "payment-service",
+		},
+		{
+			name:          "status alias",
+			aliasField:    "status",
+			canonicalField: "http_status_code",
+			value:         "200",
+		},
+		{
+			name:          "method alias",
+			aliasField:    "method",
+			canonicalField: "http_method",
+			value:         "GET",
+		},
+		{
+			name:          "route alias",
+			aliasField:    "route",
+			canonicalField: "http_route",
+			value:         "/api/v1/users",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			translator := NewTranslator(0)
+			query := &oql.Query{
+				Signal: oql.SignalSpans,
+				Operations: []oql.Operation{
+					&oql.WhereOp{
+						Condition: &oql.BinaryCondition{
+							Left:     tt.aliasField, // Use alias (what user types)
+							Operator: "=",
+							Right:    tt.value,
+						},
+					},
+				},
+			}
+
+			sqls, err := translator.TranslateQuery(query)
+			require.NoError(t, err)
+			require.Len(t, sqls, 1)
+
+			// Should translate alias to canonical column name
+			expectedCondition := fmt.Sprintf("%s = '%s'", tt.canonicalField, tt.value)
+			assert.Contains(t, sqls[0], expectedCondition,
+				"Expected alias '%s' to be translated to canonical column '%s'",
+				tt.aliasField, tt.canonicalField)
+		})
+	}
 }
 
 func TestTranslator_AndConditions(t *testing.T) {
@@ -881,6 +959,541 @@ func TestTranslator_WildcardPatternMatching(t *testing.T) {
 			require.NoError(t, err, tt.description)
 			require.Len(t, sqls, 1)
 			assert.Contains(t, sqls[0], tt.wantContain, tt.description)
+		})
+	}
+}
+
+func TestTranslator_NowExpression(t *testing.T) {
+	tests := []struct {
+		name        string
+		query       *oql.Query
+		wantContain string
+		description string
+	}{
+		{
+			name: "timestamp equals now()",
+			query: &oql.Query{
+				Signal: oql.SignalSpans,
+				Operations: []oql.Operation{
+					&oql.WhereOp{
+						Condition: &oql.BinaryCondition{
+							Left:     "timestamp",
+							Operator: "==",
+							Right:    &oql.NowExpression{},
+						},
+					},
+				},
+			},
+			wantContain: "\"timestamp\" = now()",
+			description: "now() should translate to Pinot now() function",
+		},
+		{
+			name: "timestamp > now()",
+			query: &oql.Query{
+				Signal: oql.SignalLogs,
+				Operations: []oql.Operation{
+					&oql.WhereOp{
+						Condition: &oql.BinaryCondition{
+							Left:     "timestamp",
+							Operator: ">",
+							Right:    &oql.NowExpression{},
+						},
+					},
+				},
+			},
+			wantContain: "\"timestamp\" > now()",
+			description: "greater than now() comparison",
+		},
+		{
+			name: "timestamp < now()",
+			query: &oql.Query{
+				Signal: oql.SignalMetrics,
+				Operations: []oql.Operation{
+					&oql.WhereOp{
+						Condition: &oql.BinaryCondition{
+							Left:     "timestamp",
+							Operator: "<",
+							Right:    &oql.NowExpression{},
+						},
+					},
+				},
+			},
+			wantContain: "\"timestamp\" < now()",
+			description: "less than now() comparison",
+		},
+		{
+			name: "timestamp >= now()",
+			query: &oql.Query{
+				Signal: oql.SignalSpans,
+				Operations: []oql.Operation{
+					&oql.WhereOp{
+						Condition: &oql.BinaryCondition{
+							Left:     "timestamp",
+							Operator: ">=",
+							Right:    &oql.NowExpression{},
+						},
+					},
+				},
+			},
+			wantContain: "\"timestamp\" >= now()",
+			description: "greater than or equal now() comparison",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			translator := NewTranslator(0)
+			sqls, err := translator.TranslateQuery(tt.query)
+			require.NoError(t, err, tt.description)
+			require.Len(t, sqls, 1)
+			assert.Contains(t, sqls[0], tt.wantContain, tt.description)
+		})
+	}
+}
+
+func TestTranslator_TimeArithmeticExpression(t *testing.T) {
+	tests := []struct {
+		name        string
+		query       *oql.Query
+		wantContain string
+		description string
+	}{
+		{
+			name: "now() - 1h",
+			query: &oql.Query{
+				Signal: oql.SignalSpans,
+				Operations: []oql.Operation{
+					&oql.WhereOp{
+						Condition: &oql.BinaryCondition{
+							Left:     "timestamp",
+							Operator: ">",
+							Right: &oql.TimeArithmeticExpression{
+								Base:     &oql.NowExpression{},
+								Operator: "-",
+								Offset:   "1h",
+							},
+						},
+					},
+				},
+			},
+			wantContain: "\"timestamp\" > (now() - 3600000)",
+			description: "1 hour = 3600000 milliseconds",
+		},
+		{
+			name: "now() - 30m",
+			query: &oql.Query{
+				Signal: oql.SignalLogs,
+				Operations: []oql.Operation{
+					&oql.WhereOp{
+						Condition: &oql.BinaryCondition{
+							Left:     "timestamp",
+							Operator: ">=",
+							Right: &oql.TimeArithmeticExpression{
+								Base:     &oql.NowExpression{},
+								Operator: "-",
+								Offset:   "30m",
+							},
+						},
+					},
+				},
+			},
+			wantContain: "\"timestamp\" >= (now() - 1800000)",
+			description: "30 minutes = 1800000 milliseconds",
+		},
+		{
+			name: "now() - 5s",
+			query: &oql.Query{
+				Signal: oql.SignalMetrics,
+				Operations: []oql.Operation{
+					&oql.WhereOp{
+						Condition: &oql.BinaryCondition{
+							Left:     "timestamp",
+							Operator: ">",
+							Right: &oql.TimeArithmeticExpression{
+								Base:     &oql.NowExpression{},
+								Operator: "-",
+								Offset:   "5s",
+							},
+						},
+					},
+				},
+			},
+			wantContain: "\"timestamp\" > (now() - 5000)",
+			description: "5 seconds = 5000 milliseconds",
+		},
+		{
+			name: "now() - 100ms",
+			query: &oql.Query{
+				Signal: oql.SignalSpans,
+				Operations: []oql.Operation{
+					&oql.WhereOp{
+						Condition: &oql.BinaryCondition{
+							Left:     "timestamp",
+							Operator: ">=",
+							Right: &oql.TimeArithmeticExpression{
+								Base:     &oql.NowExpression{},
+								Operator: "-",
+								Offset:   "100ms",
+							},
+						},
+					},
+				},
+			},
+			wantContain: "\"timestamp\" >= (now() - 100)",
+			description: "100 milliseconds",
+		},
+		{
+			name: "now() + 1h (future)",
+			query: &oql.Query{
+				Signal: oql.SignalSpans,
+				Operations: []oql.Operation{
+					&oql.WhereOp{
+						Condition: &oql.BinaryCondition{
+							Left:     "timestamp",
+							Operator: "<",
+							Right: &oql.TimeArithmeticExpression{
+								Base:     &oql.NowExpression{},
+								Operator: "+",
+								Offset:   "1h",
+							},
+						},
+					},
+				},
+			},
+			wantContain: "\"timestamp\" < (now() + 3600000)",
+			description: "future time: now() + 1 hour",
+		},
+		{
+			name: "now() + 5m (future)",
+			query: &oql.Query{
+				Signal: oql.SignalLogs,
+				Operations: []oql.Operation{
+					&oql.WhereOp{
+						Condition: &oql.BinaryCondition{
+							Left:     "timestamp",
+							Operator: "<=",
+							Right: &oql.TimeArithmeticExpression{
+								Base:     &oql.NowExpression{},
+								Operator: "+",
+								Offset:   "5m",
+							},
+						},
+					},
+				},
+			},
+			wantContain: "\"timestamp\" <= (now() + 300000)",
+			description: "future time: now() + 5 minutes",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			translator := NewTranslator(0)
+			sqls, err := translator.TranslateQuery(tt.query)
+			require.NoError(t, err, tt.description)
+			require.Len(t, sqls, 1)
+			assert.Contains(t, sqls[0], tt.wantContain, tt.description)
+		})
+	}
+}
+
+func TestTranslator_ComplexTimeQueries(t *testing.T) {
+	tests := []struct {
+		name         string
+		query        *oql.Query
+		wantContains []string
+		description  string
+	}{
+		{
+			name: "time range: now() - 1h to now()",
+			query: &oql.Query{
+				Signal: oql.SignalSpans,
+				Operations: []oql.Operation{
+					&oql.WhereOp{
+						Condition: &oql.AndCondition{
+							Conditions: []oql.Condition{
+								&oql.BinaryCondition{
+									Left:     "timestamp",
+									Operator: ">",
+									Right: &oql.TimeArithmeticExpression{
+										Base:     &oql.NowExpression{},
+										Operator: "-",
+										Offset:   "1h",
+									},
+								},
+								&oql.BinaryCondition{
+									Left:     "timestamp",
+									Operator: "<",
+									Right:    &oql.NowExpression{},
+								},
+							},
+						},
+					},
+				},
+			},
+			wantContains: []string{
+				"\"timestamp\" > (now() - 3600000)",
+				"\"timestamp\" < now()",
+			},
+			description: "time range from 1 hour ago to now",
+		},
+		{
+			name: "combined with other conditions",
+			query: &oql.Query{
+				Signal: oql.SignalSpans,
+				Operations: []oql.Operation{
+					&oql.WhereOp{
+						Condition: &oql.AndCondition{
+							Conditions: []oql.Condition{
+								&oql.BinaryCondition{
+									Left:     "name",
+									Operator: "==",
+									Right:    "checkout",
+								},
+								&oql.BinaryCondition{
+									Left:     "timestamp",
+									Operator: ">",
+									Right: &oql.TimeArithmeticExpression{
+										Base:     &oql.NowExpression{},
+										Operator: "-",
+										Offset:   "30m",
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			wantContains: []string{
+				"name = 'checkout'",
+				"\"timestamp\" > (now() - 1800000)",
+			},
+			description: "name filter combined with time range",
+		},
+		{
+			name: "or condition with time",
+			query: &oql.Query{
+				Signal: oql.SignalLogs,
+				Operations: []oql.Operation{
+					&oql.WhereOp{
+						Condition: &oql.OrCondition{
+							Conditions: []oql.Condition{
+								&oql.BinaryCondition{
+									Left:     "log_level",
+									Operator: "==",
+									Right:    "error",
+								},
+								&oql.BinaryCondition{
+									Left:     "timestamp",
+									Operator: ">",
+									Right: &oql.TimeArithmeticExpression{
+										Base:     &oql.NowExpression{},
+										Operator: "-",
+										Offset:   "5m",
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			wantContains: []string{
+				"log_level = 'error'",
+				"\"timestamp\" > (now() - 300000)",
+				" OR ",
+			},
+			description: "error logs OR recent logs within 5 minutes",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			translator := NewTranslator(0)
+			sqls, err := translator.TranslateQuery(tt.query)
+			require.NoError(t, err, tt.description)
+			require.Len(t, sqls, 1)
+
+			for _, want := range tt.wantContains {
+				assert.Contains(t, sqls[0], want, tt.description)
+			}
+		})
+	}
+}
+
+func TestTranslator_TracesVsSpans(t *testing.T) {
+	tests := []struct {
+		name             string
+		signal           oql.SignalType
+		expectRootFilter bool
+		expectedSQL      string
+		description      string
+	}{
+		{
+			name:             "signal=spans shows all spans",
+			signal:           oql.SignalSpans,
+			expectRootFilter: false,
+			expectedSQL:      "SELECT * FROM otel_spans WHERE tenant_id = 0 AND service_name = 'test-service' ORDER BY \"timestamp\" DESC",
+			description:      "spans query should show all spans, not just root spans",
+		},
+		{
+			name:             "signal=trace shows only root spans",
+			signal:           oql.SignalTraces,
+			expectRootFilter: true,
+			expectedSQL:      "SELECT * FROM otel_spans WHERE tenant_id = 0 AND (parent_span_id IS NULL OR parent_span_id = '' OR parent_span_id = '0' OR parent_span_id = '00000000000000000000000000000000') AND service_name = 'test-service' ORDER BY \"timestamp\" DESC",
+			description:      "traces query should filter to show only root spans (one per trace)",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			translator := NewTranslator(0)
+			query := &oql.Query{
+				Signal: tt.signal,
+				Operations: []oql.Operation{
+					&oql.WhereOp{
+						Condition: &oql.BinaryCondition{
+							Left:     "service_name",
+							Operator: "==",
+							Right:    "test-service",
+						},
+					},
+				},
+			}
+
+			sqls, err := translator.TranslateQuery(query)
+			require.NoError(t, err, tt.description)
+			require.Len(t, sqls, 1)
+
+			// Verify exact SQL matches
+			assert.Equal(t, tt.expectedSQL, sqls[0], tt.description)
+
+			// Also verify specific parts
+			if tt.expectRootFilter {
+				assert.Contains(t, sqls[0], "parent_span_id IS NULL", tt.description)
+			} else {
+				assert.NotContains(t, sqls[0], "parent_span_id IS NULL", tt.description)
+			}
+		})
+	}
+}
+
+func TestTranslator_DefaultTimestampOrdering(t *testing.T) {
+	tests := []struct {
+		name        string
+		query       *oql.Query
+		wantOrdering bool
+		description string
+	}{
+		{
+			name: "spans without explicit sort gets default ordering",
+			query: &oql.Query{
+				Signal: oql.SignalSpans,
+				Operations: []oql.Operation{
+					&oql.WhereOp{
+						Condition: &oql.BinaryCondition{
+							Left:     "name",
+							Operator: "==",
+							Right:    "test",
+						},
+					},
+				},
+			},
+			wantOrdering: true,
+			description:  "spans query should have default timestamp DESC ordering",
+		},
+		{
+			name: "logs without explicit sort gets default ordering",
+			query: &oql.Query{
+				Signal: oql.SignalLogs,
+				Operations: []oql.Operation{
+					&oql.LimitOp{Count: 100},
+				},
+			},
+			wantOrdering: true,
+			description:  "logs query should have default timestamp DESC ordering",
+		},
+		{
+			name: "traces without explicit sort gets default ordering",
+			query: &oql.Query{
+				Signal: oql.SignalTraces,
+				Operations: []oql.Operation{
+					&oql.WhereOp{
+						Condition: &oql.BinaryCondition{
+							Left:     "trace_id",
+							Operator: "==",
+							Right:    "abc123",
+						},
+					},
+				},
+			},
+			wantOrdering: true,
+			description:  "traces query should have default timestamp DESC ordering and root span filter",
+		},
+		{
+			name: "metrics without explicit sort has no default ordering",
+			query: &oql.Query{
+				Signal: oql.SignalMetrics,
+				Operations: []oql.Operation{
+					&oql.WhereOp{
+						Condition: &oql.BinaryCondition{
+							Left:     "metric_name",
+							Operator: "==",
+							Right:    "http.server.duration",
+						},
+					},
+				},
+			},
+			wantOrdering: false,
+			description:  "metrics query should NOT have default ordering",
+		},
+		{
+			name: "spans with explicit sort does not get default ordering",
+			query: &oql.Query{
+				Signal: oql.SignalSpans,
+				Operations: []oql.Operation{
+					&oql.WhereOp{
+						Condition: &oql.BinaryCondition{
+							Left:     "duration",
+							Operator: ">",
+							Right:    int64(1000),
+						},
+					},
+					&oql.SortOp{
+						Fields: []oql.SortField{{Field: "duration", Desc: true}},
+					},
+				},
+			},
+			wantOrdering: false,
+			description:  "explicit sort should override default ordering",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			translator := NewTranslator(0)
+			sqls, err := translator.TranslateQuery(tt.query)
+			require.NoError(t, err, tt.description)
+			require.Len(t, sqls, 1)
+
+			// Check for root span filter on traces
+			if tt.query.Signal == oql.SignalTraces {
+				assert.Contains(t, sqls[0], "parent_span_id IS NULL", tt.description)
+			}
+
+			if tt.wantOrdering {
+				assert.Contains(t, sqls[0], "ORDER BY \"timestamp\" DESC", tt.description)
+			} else {
+				// If there's an explicit sort, check for that instead
+				if len(tt.query.Operations) > 0 {
+					if _, ok := tt.query.Operations[len(tt.query.Operations)-1].(*oql.SortOp); ok {
+						assert.Contains(t, sqls[0], "ORDER BY", tt.description)
+						assert.NotContains(t, sqls[0], "ORDER BY \"timestamp\" DESC", tt.description)
+						return
+					}
+				}
+				// Metrics should have no ORDER BY at all
+				assert.NotContains(t, sqls[0], "ORDER BY", tt.description)
+			}
 		})
 	}
 }

@@ -1,0 +1,151 @@
+version: '3.7'
+
+services:
+  pinot-zookeeper:
+    image: ${ZK_IMAGE:-zookeeper:3.9.5}
+    container_name: "pinot-zookeeper"
+    restart: unless-stopped
+    ports:
+      - "2181:2181"
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    networks:
+      - pinot-demo
+    healthcheck:
+      test: ["CMD", "zkServer.sh", "status"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 10s
+    volumes:
+      - ./data/zookeeper:/data:rw,z
+
+  pinot-controller:
+    image: ${PINOT_IMAGE:-apachepinot/pinot:1.4.0}
+    command: "StartController -zkAddress pinot-zookeeper:2181 -dataDir /opt/pinot/data" 
+    container_name: "pinot-controller"
+    restart: unless-stopped
+    ports:
+      - "9000:9000"
+    environment:
+      JAVA_OPTS: "-Dplugins.dir=/opt/pinot/plugins -Xmx640M -XX:+UseG1GC -XX:MaxGCPauseMillis=200 -Xloggc:gc-pinot-controller.log"
+    depends_on:
+      pinot-zookeeper:
+        condition: service_healthy
+      pinot-kafka:
+        condition: service_healthy
+    networks:
+      - pinot-demo
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:9000/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 10s
+    volumes:
+      - ./data/pinot:/opt/pinot/data:rw,z
+
+  pinot-broker:
+    image: ${PINOT_IMAGE:-apachepinot/pinot:1.4.0}
+    command: "StartBroker -zkAddress pinot-zookeeper:2181"
+    container_name: "pinot-broker"
+    restart: unless-stopped
+    ports:
+      - "8099:8099"
+    environment:
+      JAVA_OPTS: "-Dplugins.dir=/opt/pinot/plugins -Xmx640M -XX:+UseG1GC -XX:MaxGCPauseMillis=200 -Xloggc:gc-pinot-broker.log"
+    depends_on:
+      pinot-controller:
+        condition: service_healthy
+    networks:
+      - pinot-demo
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8099/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 10s
+    volumes:
+      - ./data/pinot:/opt/pinot/data:rw,z
+
+  pinot-server:
+    image: ${PINOT_IMAGE:-apachepinot/pinot:1.4.0}
+    command: "StartServer -zkAddress pinot-zookeeper:2181 -dataDir /opt/pinot/data"
+    container_name: "pinot-server"
+    restart: unless-stopped
+    ports:
+      - "8098:8098"
+    environment:
+      JAVA_OPTS: "-Dplugins.dir=/opt/pinot/plugins -Xmx640M -XX:+UseG1GC -XX:MaxGCPauseMillis=200 -Xloggc:gc-pinot-server.log"
+    depends_on:
+      pinot-broker:
+        condition: service_healthy
+    networks:
+      - pinot-demo
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8097/health/readiness || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 10s
+    volumes:
+      - ./data/pinot:/opt/pinot/data:rw,z
+
+#  pinot-minion:
+#    image: ${PINOT_IMAGE:-apachepinot/pinot:1.4.0}
+#    command: "StartMinion -zkAddress pinot-zookeeper:2181 -dataDir /opt/pinot/data"
+#    restart: unless-stopped
+#    container_name: "pinot-minion"
+#    ports:
+#      - "6000:6000"
+#    depends_on:
+#      - pinot-broker
+#    networks:
+#      - pinot-demo
+#    volumes:
+#      - ./data/pinot:/opt/pinot/data:rw,z
+
+  pinot-kafka:
+    image: ${KAFKA_IMAGE:-apache/kafka:4.0.0}
+    container_name: "kafka"
+    restart: unless-stopped
+    ports:
+      - "9092:9092"
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      CLUSTER_ID: MkU3OEVBNTcwNTJENDM2Qk
+    networks:
+      - pinot-demo
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server kafka:9092"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 10s
+    deploy:
+      replicas: ${KAFKA_REPLICAS:-0}
+    volumes:
+      - ./data/kafka:/var/lib/kafka/data:rw,z
+    depends_on:
+      pinot-zookeeper:
+        condition: service_healthy
+
+  perses:
+    image: persesdev/perses:v0.53.1-debug
+    ports:
+      - "8082:8080"
+    volumes:
+      - ./data/perses:/perses:rw,z
+
+networks:
+  pinot-demo:
+    name: pinot-demo
+    driver: bridge

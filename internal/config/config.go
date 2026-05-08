@@ -48,6 +48,9 @@ type Config struct {
 	DebugIngestion    bool `yaml:"debug_ingestion"`     // Debug logging for data ingestion
 	DebugQuery        bool `yaml:"debug_query"`         // Debug logging for query execution
 	DebugTranslation  bool `yaml:"debug_translation"`   // Debug logging for query translation
+
+	// Startup validation
+	ExitOnFailure bool `yaml:"exit_on_failure"` // Exit if Kafka/Pinot validation fails at startup
 }
 
 // Load reads configuration from config file, environment variables, and command-line flags
@@ -77,6 +80,7 @@ func Load() (*Config, error) {
 	var debugIngestion bool
 	var debugQuery bool
 	var debugTranslation bool
+	var exitOnFailure bool
 
 	flag.StringVar(&pinotURL, "pinot-url", "", "Apache Pinot broker URL")
 	flag.StringVar(&kafkaBrokers, "kafka-brokers", "", "Kafka broker addresses")
@@ -95,6 +99,7 @@ func Load() (*Config, error) {
 	flag.BoolVar(&debugIngestion, "debug-ingestion", false, "Enable debug logging for data ingestion")
 	flag.BoolVar(&debugQuery, "debug-query", false, "Enable debug logging for query execution")
 	flag.BoolVar(&debugTranslation, "debug-translation", false, "Enable debug logging for query translation")
+	flag.BoolVar(&exitOnFailure, "exit-on-failure", false, "Exit if Kafka/Pinot validation fails at startup")
 
 	flag.Parse()
 
@@ -175,6 +180,11 @@ func Load() (*Config, error) {
 			cfg.DebugTranslation = val
 		}
 	}
+	if env := os.Getenv("EXIT_ON_FAILURE"); env != "" {
+		if val, err := strconv.ParseBool(env); err == nil {
+			cfg.ExitOnFailure = val
+		}
+	}
 
 	// 3. Override with CLI flags (if provided)
 	if pinotURL != "" {
@@ -231,6 +241,9 @@ func Load() (*Config, error) {
 	}
 	if flag.Lookup("debug-translation").Value.String() == "true" {
 		cfg.DebugTranslation = true
+	}
+	if flag.Lookup("exit-on-failure").Value.String() == "true" {
+		cfg.ExitOnFailure = true
 	}
 
 	// If global debug is enabled, enable all debug flags

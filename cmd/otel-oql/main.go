@@ -10,6 +10,7 @@ import (
 	"syscall"
 
 	"github.com/pilhuhn/otel-oql/internal/config"
+	"github.com/pilhuhn/otel-oql/internal/startup"
 	"github.com/pilhuhn/otel-oql/pkg/api"
 	"github.com/pilhuhn/otel-oql/pkg/auth"
 	"github.com/pilhuhn/otel-oql/pkg/ingestion"
@@ -118,6 +119,11 @@ func runAllMode(ctx context.Context, cfg *config.Config) error {
 	if cfg.ObservabilityEnabled {
 		fmt.Printf("  Endpoint: %s\n", cfg.ObservabilityEndpoint)
 		fmt.Printf("  Tenant ID: %s\n", cfg.ObservabilityTenantID)
+	}
+
+	// Validate dependencies at startup
+	if err := startup.ValidateAll(cfg.Mode, cfg.PinotURL, cfg.KafkaBrokers, cfg.ExitOnFailure); err != nil {
+		return err
 	}
 
 	// Initialize authentication
@@ -238,6 +244,11 @@ func runIngestionMode(ctx context.Context, cfg *config.Config) error {
 		fmt.Printf("  Tenant ID: %s\n", cfg.ObservabilityTenantID)
 	}
 
+	// Validate dependencies at startup
+	if err := startup.ValidateAll(cfg.Mode, cfg.PinotURL, cfg.KafkaBrokers, cfg.ExitOnFailure); err != nil {
+		return err
+	}
+
 	// Initialize authentication
 	authMiddleware, err := initAuth(cfg)
 	if err != nil {
@@ -326,6 +337,11 @@ func runQueryMode(ctx context.Context, cfg *config.Config) error {
 	if cfg.ObservabilityEnabled {
 		fmt.Printf("  Endpoint: %s\n", cfg.ObservabilityEndpoint)
 		fmt.Printf("  Tenant ID: %s\n", cfg.ObservabilityTenantID)
+	}
+
+	// Validate dependencies at startup
+	if err := startup.ValidateAll(cfg.Mode, cfg.PinotURL, cfg.KafkaBrokers, cfg.ExitOnFailure); err != nil {
+		return err
 	}
 
 	// Initialize authentication

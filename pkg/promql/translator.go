@@ -33,7 +33,8 @@ func (t *Translator) TranslateQuery(promql string) ([]string, error) {
 	t.metricNames = metricMapping
 
 	// Parse using Prometheus parser
-	expr, err := parser.ParseExpr(normalized)
+	p := parser.NewParser(parser.Options{})
+	expr, err := p.ParseExpr(normalized)
 	if err != nil {
 		return nil, fmt.Errorf("promql parse error: %w", err)
 	}
