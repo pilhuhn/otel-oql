@@ -23,7 +23,7 @@ user10,10
 user100,100
 user999,999
 `
-	if err := os.WriteFile(usersFile, []byte(usersData), 0644); err != nil {
+	if err := os.WriteFile(usersFile, []byte(usersData), 0600); err != nil {
 		t.Fatalf("Failed to create users.csv: %v", err)
 	}
 
@@ -34,7 +34,7 @@ user10,key10
 user100,key100
 user999,key999
 `
-	if err := os.WriteFile(apiKeysFile, []byte(apiKeysData), 0644); err != nil {
+	if err := os.WriteFile(apiKeysFile, []byte(apiKeysData), 0600); err != nil {
 		t.Fatalf("Failed to create api-keys.csv: %v", err)
 	}
 
@@ -108,7 +108,7 @@ func TestTestModeTenantIDConversionForLargeValues(t *testing.T) {
 	usersData := `username,tenant_id
 testuser,50
 `
-	if err := os.WriteFile(usersFile, []byte(usersData), 0644); err != nil {
+	if err := os.WriteFile(usersFile, []byte(usersData), 0600); err != nil {
 		t.Fatalf("Failed to create users.csv: %v", err)
 	}
 
@@ -116,7 +116,7 @@ testuser,50
 	apiKeysData := `username,api_key
 testuser,testkey
 `
-	if err := os.WriteFile(apiKeysFile, []byte(apiKeysData), 0644); err != nil {
+	if err := os.WriteFile(apiKeysFile, []byte(apiKeysData), 0600); err != nil {
 		t.Fatalf("Failed to create api-keys.csv: %v", err)
 	}
 

@@ -17,7 +17,7 @@ alice,1
 bob,1
 charlie,2
 `
-	if err := os.WriteFile(usersFile, []byte(usersData), 0644); err != nil {
+	if err := os.WriteFile(usersFile, []byte(usersData), 0600); err != nil {
 		t.Fatalf("Failed to create users.csv: %v", err)
 	}
 
@@ -28,7 +28,7 @@ alice,key-alice-123
 bob,key-bob-456
 charlie,key-charlie-789
 `
-	if err := os.WriteFile(apiKeysFile, []byte(apiKeysData), 0644); err != nil {
+	if err := os.WriteFile(apiKeysFile, []byte(apiKeysData), 0600); err != nil {
 		t.Fatalf("Failed to create api-keys.csv: %v", err)
 	}
 
@@ -73,7 +73,7 @@ func TestFileStore_AuthenticateAPIKey(t *testing.T) {
 alice,1
 bob,2
 `
-	if err := os.WriteFile(usersFile, []byte(usersData), 0644); err != nil {
+	if err := os.WriteFile(usersFile, []byte(usersData), 0600); err != nil {
 		t.Fatalf("Failed to create users.csv: %v", err)
 	}
 
@@ -83,7 +83,7 @@ bob,2
 alice,key-alice-123
 bob,key-bob-456
 `
-	if err := os.WriteFile(apiKeysFile, []byte(apiKeysData), 0644); err != nil {
+	if err := os.WriteFile(apiKeysFile, []byte(apiKeysData), 0600); err != nil {
 		t.Fatalf("Failed to create api-keys.csv: %v", err)
 	}
 
@@ -188,10 +188,10 @@ func TestFileStore_InvalidFormat(t *testing.T) {
 			usersFile := filepath.Join(tmpDir, "users.csv")
 			apiKeysFile := filepath.Join(tmpDir, "api-keys.csv")
 
-			if err := os.WriteFile(usersFile, []byte(tt.usersData), 0644); err != nil {
+			if err := os.WriteFile(usersFile, []byte(tt.usersData), 0600); err != nil {
 				t.Fatalf("Failed to create users.csv: %v", err)
 			}
-			if err := os.WriteFile(apiKeysFile, []byte(tt.apiKeysData), 0644); err != nil {
+			if err := os.WriteFile(apiKeysFile, []byte(tt.apiKeysData), 0600); err != nil {
 				t.Fatalf("Failed to create api-keys.csv: %v", err)
 			}
 
@@ -215,7 +215,7 @@ bob,1
 charlie,1
 dave,2
 `
-	if err := os.WriteFile(usersFile, []byte(usersData), 0644); err != nil {
+	if err := os.WriteFile(usersFile, []byte(usersData), 0600); err != nil {
 		t.Fatalf("Failed to create users.csv: %v", err)
 	}
 
@@ -227,7 +227,7 @@ bob,key-bob
 charlie,key-charlie
 dave,key-dave
 `
-	if err := os.WriteFile(apiKeysFile, []byte(apiKeysData), 0644); err != nil {
+	if err := os.WriteFile(apiKeysFile, []byte(apiKeysData), 0600); err != nil {
 		t.Fatalf("Failed to create api-keys.csv: %v", err)
 	}
 

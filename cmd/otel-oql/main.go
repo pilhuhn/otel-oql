@@ -115,6 +115,13 @@ func runAllMode(ctx context.Context, cfg *config.Config) error {
 	fmt.Printf("Query API Port: %d\n", cfg.QueryAPIPort)
 	fmt.Printf("MCP Port: %d\n", cfg.MCPPort)
 	fmt.Printf("Test Mode: %v\n", cfg.TestMode)
+	if cfg.TestMode {
+		fmt.Printf("\n⚠️  WARNING: TEST MODE ENABLED - Authentication is relaxed!\n")
+		fmt.Printf("   - API key authentication is optional\n")
+		fmt.Printf("   - Falls back to tenant-id headers\n")
+		fmt.Printf("   - Default tenant: 0\n")
+		fmt.Printf("   - DO NOT use in production!\n\n")
+	}
 	fmt.Printf("Observability: %v\n", cfg.ObservabilityEnabled)
 	if cfg.ObservabilityEnabled {
 		fmt.Printf("  Endpoint: %s\n", cfg.ObservabilityEndpoint)
@@ -238,6 +245,13 @@ func runIngestionMode(ctx context.Context, cfg *config.Config) error {
 	fmt.Printf("OTLP gRPC Port: %d\n", cfg.OTLPGRPCPort)
 	fmt.Printf("OTLP HTTP Port: %d\n", cfg.OTLPHTTPPort)
 	fmt.Printf("Test Mode: %v\n", cfg.TestMode)
+	if cfg.TestMode {
+		fmt.Printf("\n⚠️  WARNING: TEST MODE ENABLED - Authentication is relaxed!\n")
+		fmt.Printf("   - API key authentication is optional\n")
+		fmt.Printf("   - Falls back to tenant-id headers\n")
+		fmt.Printf("   - Default tenant: 0\n")
+		fmt.Printf("   - DO NOT use in production!\n\n")
+	}
 	fmt.Printf("Observability: %v\n", cfg.ObservabilityEnabled)
 	if cfg.ObservabilityEnabled {
 		fmt.Printf("  Endpoint: %s\n", cfg.ObservabilityEndpoint)
@@ -333,6 +347,13 @@ func runQueryMode(ctx context.Context, cfg *config.Config) error {
 	fmt.Printf("Query API Port: %d\n", cfg.QueryAPIPort)
 	fmt.Printf("MCP Port: %d\n", cfg.MCPPort)
 	fmt.Printf("Test Mode: %v\n", cfg.TestMode)
+	if cfg.TestMode {
+		fmt.Printf("\n⚠️  WARNING: TEST MODE ENABLED - Authentication is relaxed!\n")
+		fmt.Printf("   - API key authentication is optional\n")
+		fmt.Printf("   - Falls back to tenant-id headers\n")
+		fmt.Printf("   - Default tenant: 0\n")
+		fmt.Printf("   - DO NOT use in production!\n\n")
+	}
 	fmt.Printf("Observability: %v\n", cfg.ObservabilityEnabled)
 	if cfg.ObservabilityEnabled {
 		fmt.Printf("  Endpoint: %s\n", cfg.ObservabilityEndpoint)

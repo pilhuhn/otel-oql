@@ -25,7 +25,7 @@ alice,1
 bob,1
 charlie,2
 `
-	if err := os.WriteFile(usersFile, []byte(usersData), 0644); err != nil {
+	if err := os.WriteFile(usersFile, []byte(usersData), 0600); err != nil {
 		t.Fatalf("Failed to create users.csv: %v", err)
 	}
 
@@ -36,7 +36,7 @@ alice,oql_key_alice_123456789abcdef
 bob,oql_key_bob_987654321fedcba
 charlie,oql_key_charlie_abcdef123456
 `
-	if err := os.WriteFile(apiKeysFile, []byte(apiKeysData), 0644); err != nil {
+	if err := os.WriteFile(apiKeysFile, []byte(apiKeysData), 0600); err != nil {
 		t.Fatalf("Failed to create api-keys.csv: %v", err)
 	}
 
@@ -165,7 +165,7 @@ func TestIntegrationTestMode(t *testing.T) {
 	usersData := `username,tenant_id
 testuser,5
 `
-	if err := os.WriteFile(usersFile, []byte(usersData), 0644); err != nil {
+	if err := os.WriteFile(usersFile, []byte(usersData), 0600); err != nil {
 		t.Fatalf("Failed to create users.csv: %v", err)
 	}
 
@@ -173,7 +173,7 @@ testuser,5
 	apiKeysData := `username,api_key
 testuser,test_key_123
 `
-	if err := os.WriteFile(apiKeysFile, []byte(apiKeysData), 0644); err != nil {
+	if err := os.WriteFile(apiKeysFile, []byte(apiKeysData), 0600); err != nil {
 		t.Fatalf("Failed to create api-keys.csv: %v", err)
 	}
 

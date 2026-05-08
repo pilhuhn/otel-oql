@@ -17,19 +17,63 @@ type Authenticator interface {
 	AuthenticateAPIKey(apiKey string) (username string, tenantID int, ok bool)
 }
 
+const (
+	// Error messages
+	ErrMissingAuth            = "missing Authorization header"
+	ErrInvalidAuthFormat      = "invalid Authorization header format (expected: Bearer <token>)"
+	ErrInvalidAPIKey          = "invalid API key"
+	ErrMissingMetadata        = "missing metadata"
+	ErrMissingAuthMetadata    = "missing authorization metadata"
+	ErrInvalidAuthMetadata    = "invalid authorization format"
+
+	// Default test username
+	TestModeUsername = "test-user"
+)
+
 // Middleware provides HTTP and gRPC authentication middleware
 type Middleware struct {
-	auth          Authenticator
-	testMode      bool
-	tenantFallback bool // If true, fall back to tenant-id header/metadata in test mode
+	auth             Authenticator
+	testMode         bool
+	tenantValidator  *tenant.Validator // Cached for test mode
 }
 
 // NewMiddleware creates a new authentication middleware
 func NewMiddleware(auth Authenticator, testMode bool) *Middleware {
-	return &Middleware{
-		auth:     auth,
-		testMode: testMode,
+	var validator *tenant.Validator
+	if testMode {
+		validator = tenant.NewValidator(true)
 	}
+	return &Middleware{
+		auth:            auth,
+		testMode:        testMode,
+		tenantValidator: validator,
+	}
+}
+
+// authenticateBearer extracts and validates a Bearer token
+// Returns (username, tenantID, error)
+func (m *Middleware) authenticateBearer(authHeader string) (string, int, error) {
+	parts := strings.SplitN(authHeader, " ", 2)
+	if len(parts) != 2 || parts[0] != "Bearer" {
+		return "", 0, &AuthError{Message: ErrInvalidAuthFormat}
+	}
+
+	apiKey := parts[1]
+	username, tenantID, ok := m.auth.AuthenticateAPIKey(apiKey)
+	if !ok {
+		return "", 0, &AuthError{Message: ErrInvalidAPIKey}
+	}
+
+	return username, tenantID, nil
+}
+
+// AuthError represents an authentication error
+type AuthError struct {
+	Message string
+}
+
+func (e *AuthError) Error() string {
+	return e.Message
 }
 
 // HTTPMiddleware is an HTTP middleware that authenticates API keys and injects tenant ID
@@ -41,26 +85,16 @@ func (m *Middleware) HTTPMiddleware(next http.Handler) http.Handler {
 		// Check for Authorization header first
 		authHeader := r.Header.Get("Authorization")
 		if authHeader != "" {
-			// Parse "Bearer <api-key>"
-			parts := strings.SplitN(authHeader, " ", 2)
-			if len(parts) != 2 || parts[0] != "Bearer" {
-				http.Error(w, "invalid Authorization header format (expected: Bearer <api-key>)", http.StatusUnauthorized)
-				return
-			}
-
-			apiKey := parts[1]
-
-			// Authenticate API key
-			var ok bool
-			username, tenantID, ok = m.auth.AuthenticateAPIKey(apiKey)
-			if !ok {
-				http.Error(w, "invalid API key", http.StatusUnauthorized)
+			var err error
+			username, tenantID, err = m.authenticateBearer(authHeader)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusUnauthorized)
 				return
 			}
 		} else {
 			// No Authorization header - check if test mode allows tenant-id header
 			if !m.testMode {
-				http.Error(w, "missing Authorization header", http.StatusUnauthorized)
+				http.Error(w, ErrMissingAuth, http.StatusUnauthorized)
 				return
 			}
 
@@ -69,17 +103,16 @@ func (m *Middleware) HTTPMiddleware(next http.Handler) http.Handler {
 			if tenantIDHeader == "" {
 				// In test mode with no auth and no tenant-id, use default
 				tenantID = tenant.DefaultTestTenantID
-				username = "test-user"
+				username = TestModeUsername
 			} else {
-				// Validate tenant-id header
-				validator := tenant.NewValidator(true)
+				// Validate tenant-id header using cached validator
 				var err error
-				tenantID, err = validator.ValidateTenantID(tenantIDHeader)
+				tenantID, err = m.tenantValidator.ValidateTenantID(tenantIDHeader)
 				if err != nil {
 					http.Error(w, err.Error(), http.StatusUnauthorized)
 					return
 				}
-				username = "test-user"
+				username = TestModeUsername
 			}
 		}
 
@@ -92,6 +125,34 @@ func (m *Middleware) HTTPMiddleware(next http.Handler) http.Handler {
 	})
 }
 
+// authenticateGRPC performs authentication from gRPC metadata
+func (m *Middleware) authenticateGRPC(md metadata.MD) (username string, tenantID int, err error) {
+	// Check for authorization header
+	apiKeyValues := md.Get("authorization")
+	if len(apiKeyValues) > 0 {
+		return m.authenticateBearer(apiKeyValues[0])
+	}
+
+	// No authorization - check if test mode allows tenant-id metadata
+	if !m.testMode {
+		return "", 0, &AuthError{Message: ErrMissingAuthMetadata}
+	}
+
+	// In test mode, fall back to tenant-id metadata
+	tenantIDValues := md.Get(tenant.MetadataTenantID)
+	if len(tenantIDValues) == 0 {
+		// No tenant-id either, use default
+		return TestModeUsername, tenant.DefaultTestTenantID, nil
+	}
+
+	// Validate tenant-id metadata using cached validator
+	tenantID, err = m.tenantValidator.ValidateTenantID(tenantIDValues[0])
+	if err != nil {
+		return "", 0, err
+	}
+	return TestModeUsername, tenantID, nil
+}
+
 // GRPCUnaryInterceptor is a gRPC unary interceptor that authenticates API keys
 func (m *Middleware) GRPCUnaryInterceptor() grpc.UnaryServerInterceptor {
 	return func(ctx context.Context, req interface{}, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (interface{}, error) {
@@ -102,52 +163,16 @@ func (m *Middleware) GRPCUnaryInterceptor() grpc.UnaryServerInterceptor {
 		md, ok := metadata.FromIncomingContext(ctx)
 		if !ok {
 			if !m.testMode {
-				return nil, status.Error(codes.Unauthenticated, "missing metadata")
+				return nil, status.Error(codes.Unauthenticated, ErrMissingMetadata)
 			}
 			// In test mode without metadata, use defaults
 			tenantID = tenant.DefaultTestTenantID
-			username = "test-user"
+			username = TestModeUsername
 		} else {
-			// Check for authorization header
-			apiKeyValues := md.Get("authorization")
-			if len(apiKeyValues) > 0 {
-				// Parse "Bearer <api-key>"
-				authValue := apiKeyValues[0]
-				parts := strings.SplitN(authValue, " ", 2)
-				if len(parts) != 2 || parts[0] != "Bearer" {
-					return nil, status.Error(codes.Unauthenticated, "invalid authorization format")
-				}
-
-				apiKey := parts[1]
-
-				// Authenticate API key
-				var authOk bool
-				username, tenantID, authOk = m.auth.AuthenticateAPIKey(apiKey)
-				if !authOk {
-					return nil, status.Error(codes.Unauthenticated, "invalid API key")
-				}
-			} else {
-				// No authorization - check if test mode allows tenant-id metadata
-				if !m.testMode {
-					return nil, status.Error(codes.Unauthenticated, "missing authorization metadata")
-				}
-
-				// In test mode, fall back to tenant-id metadata
-				tenantIDValues := md.Get(tenant.MetadataTenantID)
-				if len(tenantIDValues) == 0 {
-					// No tenant-id either, use default
-					tenantID = tenant.DefaultTestTenantID
-					username = "test-user"
-				} else {
-					// Validate tenant-id metadata
-					validator := tenant.NewValidator(true)
-					var err error
-					tenantID, err = validator.ValidateTenantID(tenantIDValues[0])
-					if err != nil {
-						return nil, status.Errorf(codes.Unauthenticated, "invalid tenant: %v", err)
-					}
-					username = "test-user"
-				}
+			var err error
+			username, tenantID, err = m.authenticateGRPC(md)
+			if err != nil {
+				return nil, status.Error(codes.Unauthenticated, err.Error())
 			}
 		}
 
@@ -171,52 +196,16 @@ func (m *Middleware) GRPCStreamInterceptor() grpc.StreamServerInterceptor {
 		md, ok := metadata.FromIncomingContext(ctx)
 		if !ok {
 			if !m.testMode {
-				return status.Error(codes.Unauthenticated, "missing metadata")
+				return status.Error(codes.Unauthenticated, ErrMissingMetadata)
 			}
 			// In test mode without metadata, use defaults
 			tenantID = tenant.DefaultTestTenantID
-			username = "test-user"
+			username = TestModeUsername
 		} else {
-			// Check for authorization header
-			apiKeyValues := md.Get("authorization")
-			if len(apiKeyValues) > 0 {
-				// Parse "Bearer <api-key>"
-				authValue := apiKeyValues[0]
-				parts := strings.SplitN(authValue, " ", 2)
-				if len(parts) != 2 || parts[0] != "Bearer" {
-					return status.Error(codes.Unauthenticated, "invalid authorization format")
-				}
-
-				apiKey := parts[1]
-
-				// Authenticate API key
-				var authOk bool
-				username, tenantID, authOk = m.auth.AuthenticateAPIKey(apiKey)
-				if !authOk {
-					return status.Error(codes.Unauthenticated, "invalid API key")
-				}
-			} else {
-				// No authorization - check if test mode allows tenant-id metadata
-				if !m.testMode {
-					return status.Error(codes.Unauthenticated, "missing authorization metadata")
-				}
-
-				// In test mode, fall back to tenant-id metadata
-				tenantIDValues := md.Get(tenant.MetadataTenantID)
-				if len(tenantIDValues) == 0 {
-					// No tenant-id either, use default
-					tenantID = tenant.DefaultTestTenantID
-					username = "test-user"
-				} else {
-					// Validate tenant-id metadata
-					validator := tenant.NewValidator(true)
-					var err error
-					tenantID, err = validator.ValidateTenantID(tenantIDValues[0])
-					if err != nil {
-						return status.Errorf(codes.Unauthenticated, "invalid tenant: %v", err)
-					}
-					username = "test-user"
-				}
+			var err error
+			username, tenantID, err = m.authenticateGRPC(md)
+			if err != nil {
+				return status.Error(codes.Unauthenticated, err.Error())
 			}
 		}
 

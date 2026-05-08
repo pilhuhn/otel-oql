@@ -21,6 +21,14 @@ type FileStore struct {
 
 // NewFileStore creates a new file-based user store
 func NewFileStore(usersFile, apiKeysFile string) (*FileStore, error) {
+	// Validate file permissions before loading
+	if err := validateFilePermissions(usersFile); err != nil {
+		return nil, fmt.Errorf("users file security check failed: %w", err)
+	}
+	if err := validateFilePermissions(apiKeysFile); err != nil {
+		return nil, fmt.Errorf("API keys file security check failed: %w", err)
+	}
+
 	fs := &FileStore{
 		usersFile:   usersFile,
 		apiKeysFile: apiKeysFile,
@@ -34,6 +42,31 @@ func NewFileStore(usersFile, apiKeysFile string) (*FileStore, error) {
 	}
 
 	return fs, nil
+}
+
+// validateFilePermissions checks that a file is not world-readable
+func validateFilePermissions(path string) error {
+	info, err := os.Stat(path)
+	if err != nil {
+		return err
+	}
+
+	mode := info.Mode()
+
+	// Check if file is world-readable (others have read permission)
+	if mode.Perm()&0004 != 0 {
+		return fmt.Errorf("file %s is world-readable (mode: %o) - please run: chmod 600 %s",
+			path, mode.Perm(), path)
+	}
+
+	// Check if file is group-readable (might be a concern in some environments)
+	if mode.Perm()&0040 != 0 {
+		// Log warning but don't fail - group-readable might be intentional
+		fmt.Fprintf(os.Stderr, "Warning: file %s is group-readable (mode: %o)\n",
+			path, mode.Perm())
+	}
+
+	return nil
 }
 
 // Load reads data from CSV files into memory
