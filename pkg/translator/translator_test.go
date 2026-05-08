@@ -12,12 +12,12 @@ import (
 
 func TestTranslator_BasicQueryTranslation(t *testing.T) {
 	tests := []struct {
-		name               string
-		signal             oql.SignalType
-		tenantID           int
-		expectedTable      string
-		expectOrdering     bool
-		expectRootFilter   bool
+		name             string
+		signal           oql.SignalType
+		tenantID         int
+		expectedTable    string
+		expectOrdering   bool
+		expectRootFilter bool
 	}{
 		{
 			name:             "spans signal",
@@ -243,34 +243,34 @@ func TestTranslator_WhereWithNonDottedField(t *testing.T) {
 
 func TestTranslator_FieldAliases(t *testing.T) {
 	tests := []struct {
-		name          string
-		aliasField    string
+		name           string
+		aliasField     string
 		canonicalField string
-		value         string
+		value          string
 	}{
 		{
-			name:          "service alias",
-			aliasField:    "service",
+			name:           "service alias",
+			aliasField:     "service",
 			canonicalField: "service_name",
-			value:         "payment-service",
+			value:          "payment-service",
 		},
 		{
-			name:          "status alias",
-			aliasField:    "status",
+			name:           "status alias",
+			aliasField:     "status",
 			canonicalField: "http_status_code",
-			value:         "200",
+			value:          "200",
 		},
 		{
-			name:          "method alias",
-			aliasField:    "method",
+			name:           "method alias",
+			aliasField:     "method",
 			canonicalField: "http_method",
-			value:         "GET",
+			value:          "GET",
 		},
 		{
-			name:          "route alias",
-			aliasField:    "route",
+			name:           "route alias",
+			aliasField:     "route",
 			canonicalField: "http_route",
-			value:         "/api/v1/users",
+			value:          "/api/v1/users",
 		},
 	}
 
@@ -1379,10 +1379,10 @@ func TestTranslator_TracesVsSpans(t *testing.T) {
 
 func TestTranslator_DefaultTimestampOrdering(t *testing.T) {
 	tests := []struct {
-		name        string
-		query       *oql.Query
+		name         string
+		query        *oql.Query
 		wantOrdering bool
-		description string
+		description  string
 	}{
 		{
 			name: "spans without explicit sort gets default ordering",

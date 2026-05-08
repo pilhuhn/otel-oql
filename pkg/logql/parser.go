@@ -182,7 +182,7 @@ func (p *Parser) parseMetricQueryCustom() (*Query, error) {
 	// LogQL-specific and PromQL functions that might have pipeline stages
 	functions := []string{
 		"bytes_over_time", "bytes_rate", // LogQL-specific
-		"count_over_time", "rate",       // PromQL-compatible but with pipeline
+		"count_over_time", "rate", // PromQL-compatible but with pipeline
 	}
 
 	for _, fn := range functions {
@@ -205,9 +205,9 @@ func (p *Parser) parseMetricQueryCustom() (*Query, error) {
 			}
 			// Check if it contains pipeline operators (which means PromQL parser can't handle it)
 			if strings.Contains(input, "|=") || strings.Contains(input, "|~") ||
-			   strings.Contains(input, "!=") || strings.Contains(input, "!~") ||
-			   strings.Contains(input, "| drop") || strings.Contains(input, "| keep") ||
-			   strings.Contains(input, "| json") || strings.Contains(input, "| logfmt") {
+				strings.Contains(input, "!=") || strings.Contains(input, "!~") ||
+				strings.Contains(input, "| drop") || strings.Contains(input, "| keep") ||
+				strings.Contains(input, "| json") || strings.Contains(input, "| logfmt") {
 				// PromQL function with pipeline stages - use custom parsing
 				return p.parseAggregatedLogQLMetric(input)
 			}
@@ -424,6 +424,7 @@ func isMetricQuery(query string) bool {
 
 	return false
 }
+
 // tryParseScalarExpr checks if the expression is a scalar arithmetic expression
 // This handles connection tests like vector(1)+vector(1) from Grafana
 func (p *Parser) tryParseScalarExpr(expr parser.Expr) (*ScalarExpr, bool) {

@@ -177,7 +177,7 @@ func (c *Client) CreateTable(ctx context.Context, tableConfig interface{}) error
 		// Check if this is a Kafka partition metadata error (transient)
 		bodyStr := string(body)
 		if resp.StatusCode == http.StatusInternalServerError &&
-		   strings.Contains(bodyStr, "Failed to fetch partition information for topic") {
+			strings.Contains(bodyStr, "Failed to fetch partition information for topic") {
 			lastErr = fmt.Errorf("kafka topic metadata not ready (this is normal on first setup)")
 			continue // Retry this specific error
 		}
@@ -198,10 +198,10 @@ type QueryResponse struct {
 		} `json:"dataSchema"`
 		Rows [][]interface{} `json:"rows"`
 	} `json:"resultTable"`
-	Exceptions []interface{} `json:"exceptions"`
-	NumDocsScanned int64 `json:"numDocsScanned"`
-	TotalDocs      int64 `json:"totalDocs"`
-	TimeUsedMs     int64 `json:"timeUsedMs"`
+	Exceptions     []interface{} `json:"exceptions"`
+	NumDocsScanned int64         `json:"numDocsScanned"`
+	TotalDocs      int64         `json:"totalDocs"`
+	TimeUsedMs     int64         `json:"timeUsedMs"`
 }
 
 // isConnectionError checks if the error is a connection refused error

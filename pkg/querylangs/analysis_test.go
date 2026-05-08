@@ -160,9 +160,9 @@ func TestCommonSyntaxPatterns(t *testing.T) {
 		},
 		{
 			pattern:     `> comparison`,
-			promql:      true, // metric > 100
+			promql:      true,  // metric > 100
 			logql:       false, // Not in stream selector
-			traceql:     true, // {duration > 1s}
+			traceql:     true,  // {duration > 1s}
 			description: "Comparison operators in selector",
 		},
 	}

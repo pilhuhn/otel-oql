@@ -8,10 +8,10 @@ import (
 
 // LokiResponse represents a Loki API response
 type LokiResponse struct {
-	Status    string     `json:"status"`
-	Data      *LokiData  `json:"data,omitempty"`
-	Error     string     `json:"error,omitempty"`
-	ErrorType string     `json:"errorType,omitempty"`
+	Status    string    `json:"status"`
+	Data      *LokiData `json:"data,omitempty"`
+	Error     string    `json:"error,omitempty"`
+	ErrorType string    `json:"errorType,omitempty"`
 }
 
 // LokiData represents the data field in a Loki response
@@ -35,10 +35,10 @@ type LokiStats struct {
 
 // LokiSummary represents query summary statistics
 type LokiSummary struct {
-	BytesProcessedPerSecond int64 `json:"bytesProcessedPerSecond"`
-	LinesProcessedPerSecond int64 `json:"linesProcessedPerSecond"`
-	TotalBytesProcessed     int64 `json:"totalBytesProcessed"`
-	TotalLinesProcessed     int64 `json:"totalLinesProcessed"`
+	BytesProcessedPerSecond int64   `json:"bytesProcessedPerSecond"`
+	LinesProcessedPerSecond int64   `json:"linesProcessedPerSecond"`
+	TotalBytesProcessed     int64   `json:"totalBytesProcessed"`
+	TotalLinesProcessed     int64   `json:"totalLinesProcessed"`
 	ExecTime                float64 `json:"execTime"`
 }
 

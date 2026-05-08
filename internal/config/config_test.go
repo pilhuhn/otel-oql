@@ -7,12 +7,12 @@ import (
 
 func TestModeConfiguration(t *testing.T) {
 	tests := []struct {
-		name          string
-		mode          string
-		pinotURL      string
-		kafkaBrokers  string
-		wantErr       bool
-		errContains   string
+		name         string
+		mode         string
+		pinotURL     string
+		kafkaBrokers string
+		wantErr      bool
+		errContains  string
 	}{
 		{
 			name:         "all mode - requires both Pinot and Kafka",

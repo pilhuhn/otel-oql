@@ -14,9 +14,9 @@ const (
 	TokenError
 
 	// Literals
-	TokenIdent   // identifier (field names)
-	TokenString  // string literal
-	TokenNumber  // number literal
+	TokenIdent    // identifier (field names)
+	TokenString   // string literal
+	TokenNumber   // number literal
 	TokenDuration // duration literal (100ms, 5s, etc.)
 
 	// Delimiters

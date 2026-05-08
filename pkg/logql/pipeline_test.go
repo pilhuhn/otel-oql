@@ -317,12 +317,12 @@ func TestParsePipeline(t *testing.T) {
 
 func TestSplitQueryParts(t *testing.T) {
 	tests := []struct {
-		name             string
-		query            string
-		wantSelector     string
-		wantPipeline     string
-		wantErr          bool
-		errMsg           string
+		name         string
+		query        string
+		wantSelector string
+		wantPipeline string
+		wantErr      bool
+		errMsg       string
 	}{
 		{
 			name:         "selector only",
@@ -419,10 +419,10 @@ func TestSplitQueryParts(t *testing.T) {
 
 func TestParseStringLiteral(t *testing.T) {
 	tests := []struct {
-		name          string
-		input         string
-		wantValue     string
-		wantConsumed  int
+		name         string
+		input        string
+		wantValue    string
+		wantConsumed int
 	}{
 		{
 			name:         "simple string",

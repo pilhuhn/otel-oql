@@ -9,12 +9,12 @@ import (
 
 func TestParseStreamSelector(t *testing.T) {
 	tests := []struct {
-		name        string
-		input       string
+		name         string
+		input        string
 		wantMatchers int
 		checkMatcher func(*testing.T, *StreamSelector)
-		wantErr     bool
-		errMsg      string
+		wantErr      bool
+		errMsg       string
 	}{
 		{
 			name:         "single label matcher",
@@ -108,34 +108,34 @@ func TestParseStreamSelector(t *testing.T) {
 			},
 		},
 		{
-			name:   "empty selector",
-			input:  `{}`,
+			name:    "empty selector",
+			input:   `{}`,
 			wantErr: true,
-			errMsg: "failed to parse stream selector",
+			errMsg:  "failed to parse stream selector",
 		},
 		{
-			name:   "missing opening brace",
-			input:  `job="varlogs"}`,
+			name:    "missing opening brace",
+			input:   `job="varlogs"}`,
 			wantErr: true,
-			errMsg: "failed to parse stream selector",
+			errMsg:  "failed to parse stream selector",
 		},
 		{
-			name:   "missing closing brace",
-			input:  `{job="varlogs"`,
+			name:    "missing closing brace",
+			input:   `{job="varlogs"`,
 			wantErr: true,
-			errMsg: "failed to parse stream selector",
+			errMsg:  "failed to parse stream selector",
 		},
 		{
-			name:   "invalid matcher syntax",
-			input:  `{job}`,
+			name:    "invalid matcher syntax",
+			input:   `{job}`,
 			wantErr: true,
-			errMsg: "failed to parse stream selector",
+			errMsg:  "failed to parse stream selector",
 		},
 		{
-			name:   "missing value",
-			input:  `{job=}`,
+			name:    "missing value",
+			input:   `{job=}`,
 			wantErr: true,
-			errMsg: "failed to parse stream selector",
+			errMsg:  "failed to parse stream selector",
 		},
 	}
 

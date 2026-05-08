@@ -14,9 +14,9 @@ type FileStore struct {
 	apiKeysFile string
 
 	// In-memory cache
-	mu           sync.RWMutex
-	userTenants  map[string]int    // username -> tenant_id
-	apiKeys      map[string]string // api_key -> username
+	mu          sync.RWMutex
+	userTenants map[string]int    // username -> tenant_id
+	apiKeys     map[string]string // api_key -> username
 }
 
 // NewFileStore creates a new file-based user store

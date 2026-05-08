@@ -59,7 +59,7 @@ type QueryStats struct {
 
 // SessionState holds interactive session state
 type SessionState struct {
-	lastResponse   *QueryResponse // Last query results
+	lastResponse   *QueryResponse  // Last query results
 	lastQuery      string          // Last query string
 	focusedTraceID string          // Currently focused trace ID
 	focusedSpanID  string          // Currently focused span ID (for span-level focus)
@@ -129,7 +129,7 @@ func runInteractiveMode(endpoint, tenantID string, verbose, jsonOutput, allField
 	fmt.Fprintf(os.Stderr, "  Type 'exit' or Ctrl+D to quit\n\n")
 
 	scanner := bufio.NewScanner(os.Stdin)
-	var queryHistory []string // Stack of queries for undo
+	var queryHistory []string  // Stack of queries for undo
 	session := &SessionState{} // Session state for interactive commands
 
 	for {

@@ -95,11 +95,11 @@ bob,key-bob-456
 
 	// Test API key authentication
 	tests := []struct {
-		name           string
-		apiKey         string
-		wantUsername   string
-		wantTenantID   int
-		wantAuth       bool
+		name         string
+		apiKey       string
+		wantUsername string
+		wantTenantID int
+		wantAuth     bool
 	}{
 		{
 			name:         "Valid API key for alice",

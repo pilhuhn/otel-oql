@@ -10,10 +10,10 @@ func TestVectorSelector(t *testing.T) {
 	translator := NewTranslator(0)
 
 	tests := []struct {
-		name     string
-		promql   string
-		wantSQL  string
-		wantErr  bool
+		name    string
+		promql  string
+		wantSQL string
+		wantErr bool
 	}{
 		{
 			name:    "simple metric name (PromQL style with underscores)",
@@ -591,12 +591,12 @@ func TestTimeBucketing(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			translator := NewTranslator(0)
-			
+
 			// Create time range and step
 			now := time.Now()
 			start := now.Add(-1 * time.Hour)
 			step := time.Duration(tt.stepSeconds) * time.Second
-			
+
 			sqlQueries, err := translator.TranslateQueryWithTimeRange(tt.query, &start, &now, &step)
 
 			if err != nil {

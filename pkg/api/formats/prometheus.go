@@ -8,10 +8,10 @@ import (
 
 // PrometheusResponse represents a Prometheus API response
 type PrometheusResponse struct {
-	Status string                 `json:"status"`
-	Data   *PrometheusData        `json:"data,omitempty"`
-	Error  string                 `json:"error,omitempty"`
-	ErrorType string              `json:"errorType,omitempty"`
+	Status    string          `json:"status"`
+	Data      *PrometheusData `json:"data,omitempty"`
+	Error     string          `json:"error,omitempty"`
+	ErrorType string          `json:"errorType,omitempty"`
 }
 
 // PrometheusData represents the data field in a Prometheus response

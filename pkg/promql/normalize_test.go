@@ -6,10 +6,10 @@ import (
 
 func TestNormalizeMetricNames(t *testing.T) {
 	tests := []struct {
-		name            string
-		input           string
-		wantNormalized  string
-		wantMapping     map[string]string
+		name           string
+		input          string
+		wantNormalized string
+		wantMapping    map[string]string
 	}{
 		{
 			name:           "simple OTel metric name",

@@ -132,10 +132,10 @@ type OQLResponse struct {
 
 // OQLResult represents a single query result
 type OQLResult struct {
-	SQL     string                   `json:"sql"`
-	Columns []string                 `json:"columns"`
-	Rows    [][]interface{}          `json:"rows"`
-	Stats   map[string]interface{}   `json:"stats"`
+	SQL     string                 `json:"sql"`
+	Columns []string               `json:"columns"`
+	Rows    [][]interface{}        `json:"rows"`
+	Stats   map[string]interface{} `json:"stats"`
 }
 
 // CreateTestSpan creates a test span with the given parameters

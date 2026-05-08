@@ -37,9 +37,9 @@ func TestTempoEndpoints(t *testing.T) {
 
 	t.Run("mapTraceQLTagToColumn", func(t *testing.T) {
 		tests := []struct {
-			tagName      string
-			wantColumn   string
-			wantErr      bool
+			tagName    string
+			wantColumn string
+			wantErr    bool
 		}{
 			// Intrinsic fields
 			{

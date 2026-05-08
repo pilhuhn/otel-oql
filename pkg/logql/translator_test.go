@@ -7,11 +7,11 @@ import (
 
 func TestTranslateQuery_LogRangeExpr(t *testing.T) {
 	tests := []struct {
-		name     string
-		logql    string
-		wantSQL  string
-		wantErr  bool
-		errMsg   string
+		name    string
+		logql   string
+		wantSQL string
+		wantErr bool
+		errMsg  string
 	}{
 		{
 			name:    "simple stream selector",
@@ -79,22 +79,22 @@ func TestTranslateQuery_LogRangeExpr(t *testing.T) {
 			wantSQL: `SELECT * FROM otel_logs WHERE tenant_id = 0 AND job = 'varlogs'`,
 		},
 		{
-			name:   "missing stream selector",
-			logql:  `|= "error"`,
+			name:    "missing stream selector",
+			logql:   `|= "error"`,
 			wantErr: true,
-			errMsg: "query must start with stream selector",
+			errMsg:  "query must start with stream selector",
 		},
 		{
-			name:   "empty stream selector",
-			logql:  `{}`,
+			name:    "empty stream selector",
+			logql:   `{}`,
 			wantErr: true,
-			errMsg: "parse error", // Prometheus parser rejects this
+			errMsg:  "parse error", // Prometheus parser rejects this
 		},
 		{
-			name:   "only negative matchers",
-			logql:  `{job!="test"}`,
+			name:    "only negative matchers",
+			logql:   `{job!="test"}`,
 			wantErr: true,
-			errMsg: "parse error", // Prometheus parser rejects this
+			errMsg:  "parse error", // Prometheus parser rejects this
 		},
 	}
 
@@ -215,10 +215,10 @@ func TestTranslateQuery_MetricExpr(t *testing.T) {
 			wantSQL: `SELECT log_level, SUM(LENGTH(body)) FROM otel_logs WHERE tenant_id = 0 AND job = 'varlogs' AND "timestamp" >= (now() - 300000) GROUP BY log_level`,
 		},
 		{
-			name:   "unsupported metric function",
-			logql:  `unsupported_func({job="varlogs"}[5m])`,
+			name:    "unsupported metric function",
+			logql:   `unsupported_func({job="varlogs"}[5m])`,
 			wantErr: true,
-			errMsg: "query must start with stream selector", // Not recognized as metric query
+			errMsg:  "query must start with stream selector", // Not recognized as metric query
 		},
 	}
 
@@ -312,46 +312,46 @@ func TestTranslateQuery_EdgeCases(t *testing.T) {
 		errMsg  string
 	}{
 		{
-			name:   "empty query",
-			logql:  "",
+			name:    "empty query",
+			logql:   "",
 			wantErr: true,
-			errMsg: "query must start with stream selector",
+			errMsg:  "query must start with stream selector",
 		},
 		{
-			name:   "only whitespace",
-			logql:  "   ",
+			name:    "only whitespace",
+			logql:   "   ",
 			wantErr: true,
-			errMsg: "query must start with stream selector",
+			errMsg:  "query must start with stream selector",
 		},
 		{
-			name:   "unclosed stream selector",
-			logql:  `{job="varlogs"`,
+			name:    "unclosed stream selector",
+			logql:   `{job="varlogs"`,
 			wantErr: true,
-			errMsg: "unclosed stream selector",
+			errMsg:  "unclosed stream selector",
 		},
 		{
-			name:   "invalid label matcher",
-			logql:  `{job}`,
+			name:    "invalid label matcher",
+			logql:   `{job}`,
 			wantErr: true,
-			errMsg: "failed to parse stream selector",
+			errMsg:  "failed to parse stream selector",
 		},
 		{
-			name:   "invalid pipeline operator",
-			logql:  `{job="varlogs"} |> "error"`,
+			name:    "invalid pipeline operator",
+			logql:   `{job="varlogs"} |> "error"`,
 			wantErr: true,
-			errMsg: "unknown pipeline stage",
+			errMsg:  "unknown pipeline stage",
 		},
 		{
-			name:   "unclosed string in line filter",
-			logql:  `{job="varlogs"} |= "error`,
+			name:    "unclosed string in line filter",
+			logql:   `{job="varlogs"} |= "error`,
 			wantErr: true,
-			errMsg: "failed to parse pipeline",
+			errMsg:  "failed to parse pipeline",
 		},
 		{
-			name:   "missing time range in metric query",
-			logql:  `count_over_time({job="varlogs"})`,
+			name:    "missing time range in metric query",
+			logql:   `count_over_time({job="varlogs"})`,
 			wantErr: true,
-			errMsg: "requires a range vector argument",
+			errMsg:  "requires a range vector argument",
 		},
 	}
 

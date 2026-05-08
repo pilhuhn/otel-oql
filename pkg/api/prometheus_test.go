@@ -356,10 +356,10 @@ func TestPrometheusEndpoint_ErrorResponses(t *testing.T) {
 	// This test documents expected error response formats
 
 	tests := []struct {
-		name          string
-		errorType     string
-		errorMessage  string
-		expectedJSON  string
+		name         string
+		errorType    string
+		errorMessage string
+		expectedJSON string
 	}{
 		{
 			name:         "bad_data error",

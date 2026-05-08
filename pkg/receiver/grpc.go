@@ -17,12 +17,12 @@ import (
 
 // GRPCReceiver implements OTLP gRPC receiver
 type GRPCReceiver struct {
-	port              int
-	unaryInterceptor  grpc.UnaryServerInterceptor
-	ingester          *ingestion.Ingester
-	server            *grpc.Server
-	obs               *observability.Observability
-	debugIngestion    bool
+	port             int
+	unaryInterceptor grpc.UnaryServerInterceptor
+	ingester         *ingestion.Ingester
+	server           *grpc.Server
+	obs              *observability.Observability
+	debugIngestion   bool
 }
 
 // NewGRPCReceiver creates a new OTLP gRPC receiver

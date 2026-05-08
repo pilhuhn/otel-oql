@@ -39,15 +39,15 @@ type Config struct {
 	Mode string `yaml:"mode"` // Operating mode: "all" (default), "ingestion", or "query"
 
 	// Observability (self-instrumentation)
-	ObservabilityEnabled  bool   `yaml:"observability_enabled"`  // Enable self-observability
-	ObservabilityEndpoint string `yaml:"observability_endpoint"` // OTLP gRPC endpoint (default: localhost:4317)
+	ObservabilityEnabled  bool   `yaml:"observability_enabled"`   // Enable self-observability
+	ObservabilityEndpoint string `yaml:"observability_endpoint"`  // OTLP gRPC endpoint (default: localhost:4317)
 	ObservabilityTenantID string `yaml:"observability_tenant_id"` // Tenant ID for self-observability (default: "0" in test mode)
 
 	// Debug logging
-	Debug             bool `yaml:"debug"`               // Enable debug logging
-	DebugIngestion    bool `yaml:"debug_ingestion"`     // Debug logging for data ingestion
-	DebugQuery        bool `yaml:"debug_query"`         // Debug logging for query execution
-	DebugTranslation  bool `yaml:"debug_translation"`   // Debug logging for query translation
+	Debug            bool `yaml:"debug"`             // Enable debug logging
+	DebugIngestion   bool `yaml:"debug_ingestion"`   // Debug logging for data ingestion
+	DebugQuery       bool `yaml:"debug_query"`       // Debug logging for query execution
+	DebugTranslation bool `yaml:"debug_translation"` // Debug logging for query translation
 
 	// Startup validation
 	ExitOnFailure bool `yaml:"exit_on_failure"` // Exit if Kafka/Pinot validation fails at startup
@@ -396,4 +396,3 @@ func loadConfigFile(cfg *Config, configPath string) error {
 
 	return nil
 }
-

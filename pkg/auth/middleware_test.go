@@ -148,10 +148,10 @@ func TestHTTPMiddleware_InvalidAuthFormat(t *testing.T) {
 	})
 
 	tests := []string{
-		"valid-key-123",         // Missing "Bearer" prefix
-		"Basic dXNlcjpwYXNz",    // Wrong auth type
-		"Bearer",                // Missing key
-		"Bearer key1 key2",      // Extra parts (should still work, but tests the split)
+		"valid-key-123",      // Missing "Bearer" prefix
+		"Basic dXNlcjpwYXNz", // Wrong auth type
+		"Bearer",             // Missing key
+		"Bearer key1 key2",   // Extra parts (should still work, but tests the split)
 	}
 
 	for _, authHeader := range tests {

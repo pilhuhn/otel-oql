@@ -179,8 +179,9 @@ func parseStringLiteral(input string) (string, int) {
 
 // SplitQueryParts splits a LogQL query into stream selector and pipeline parts
 // Example: {job="varlogs"} |= "error" | json
-//          ^^^^^^^^^^^^^^^^ ^^^^^^^^^^^^^^^^^^
-//          stream selector  pipeline
+//
+//	^^^^^^^^^^^^^^^^ ^^^^^^^^^^^^^^^^^^
+//	stream selector  pipeline
 func SplitQueryParts(query string) (streamSelector string, pipeline string, err error) {
 	query = strings.TrimSpace(query)
 

@@ -19,12 +19,12 @@ type Authenticator interface {
 
 const (
 	// Error messages
-	ErrMissingAuth            = "missing Authorization header"
-	ErrInvalidAuthFormat      = "invalid Authorization header format (expected: Bearer <token>)"
-	ErrInvalidAPIKey          = "invalid API key"
-	ErrMissingMetadata        = "missing metadata"
-	ErrMissingAuthMetadata    = "missing authorization metadata"
-	ErrInvalidAuthMetadata    = "invalid authorization format"
+	ErrMissingAuth         = "missing Authorization header"
+	ErrInvalidAuthFormat   = "invalid Authorization header format (expected: Bearer <token>)"
+	ErrInvalidAPIKey       = "invalid API key"
+	ErrMissingMetadata     = "missing metadata"
+	ErrMissingAuthMetadata = "missing authorization metadata"
+	ErrInvalidAuthMetadata = "invalid authorization format"
 
 	// Default test username
 	TestModeUsername = "test-user"
@@ -32,9 +32,9 @@ const (
 
 // Middleware provides HTTP and gRPC authentication middleware
 type Middleware struct {
-	auth             Authenticator
-	testMode         bool
-	tenantValidator  *tenant.Validator // Cached for test mode
+	auth            Authenticator
+	testMode        bool
+	tenantValidator *tenant.Validator // Cached for test mode
 }
 
 // NewMiddleware creates a new authentication middleware
