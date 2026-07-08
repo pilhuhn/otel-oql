@@ -521,6 +521,15 @@ podman-compose up -d
 ./oql-cli "signal=spans | limit 10"
 ./oql-cli --language=promql "http_requests_total"
 ./oql-cli --language=logql '{job="varlogs"}'
+
+# Interactive CLI with history support
+./oql-cli --tenant-id=0
+# Features:
+# - Command-line editing (arrow keys, backspace, delete)
+# - History navigation (Up/Down arrows)
+# - Reverse-i-search (Ctrl+R)
+# - Persistent history (~/.oql_history)
+# - C-shell style shortcuts (!!, !h, !<n>)
 ```
 
 ### Environment Variables
@@ -555,9 +564,10 @@ otel-oql/
 │   ├── otel-oql/              # Main service entry point
 │   │   ├── main.go
 │   │   └── setup_schema.go
-│   ├── oql-cli/               # CLI query tool
-│   │   ├── main.go
-│   │   └── README.md
+│   ├── oql-cli/               # CLI query tool with history support
+│   │   ├── main.go            # Interactive shell with readline-like editing
+│   │   ├── history_test.go    # History command tests
+│   │   └── README.md          # CLI documentation
 │   └── send-test-data/        # Test data generator
 │       └── main.go
 ├── pkg/
@@ -769,6 +779,7 @@ otel-oql/
     - ✅ Prometheus parser: Apache 2.0
     - ✅ OpenTelemetry SDK: Apache 2.0
     - ✅ Kafka client (Sarama): Apache 2.0
+    - ✅ Liner (command-line editing): Apache 2.0
     - ❌ Avoid GPL/AGPL: Loki, Tempo parsers
 
 14. **Use Podman, Not Docker**: Project standard

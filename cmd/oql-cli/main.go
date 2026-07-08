@@ -9,9 +9,12 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/peterh/liner"
 )
 
 const version = "1.0.0"
@@ -126,26 +129,60 @@ func runInteractiveMode(endpoint, tenantID string, verbose, jsonOutput, allField
 	fmt.Fprintf(os.Stderr, "  Type 'unfocus' to return to previous view\n")
 	fmt.Fprintf(os.Stderr, "  Type 'list metrics' to see available metrics\n")
 	fmt.Fprintf(os.Stderr, "  Type 'undo' to remove last refinement\n")
+	fmt.Fprintf(os.Stderr, "  Type '!!' to repeat last command, '!h' to show history, '!<n>' to run command #n\n")
 	fmt.Fprintf(os.Stderr, "  Type 'exit' or Ctrl+D to quit\n\n")
 
-	scanner := bufio.NewScanner(os.Stdin)
+	// Initialize liner for command-line editing
+	line := liner.NewLiner()
+	defer line.Close()
+
+	line.SetCtrlCAborts(true)
+
+	// Load history from file
+	historyFile := getHistoryFilePath()
+	if f, err := os.Open(historyFile); err == nil {
+		line.ReadHistory(f)
+		f.Close()
+	}
+
 	var queryHistory []string  // Stack of queries for undo
 	session := &SessionState{} // Session state for interactive commands
+	commandHistory := make([]string, 0) // History for !! / !h / !<n> commands
+
+	// Save history on exit
+	defer func() {
+		if f, err := os.Create(historyFile); err == nil {
+			line.WriteHistory(f)
+			f.Close()
+		}
+	}()
 
 	for {
-		fmt.Fprintf(os.Stderr, "oql> ")
-
-		if !scanner.Scan() {
-			// EOF (Ctrl+D)
+		input, err := line.Prompt("oql> ")
+		if err == liner.ErrPromptAborted {
+			fmt.Fprintf(os.Stderr, "\nAborted\n")
+			continue
+		} else if err != nil {
+			// EOF (Ctrl+D) or other error
 			fmt.Fprintf(os.Stderr, "\nGoodbye!\n")
 			break
 		}
 
-		input := strings.TrimSpace(scanner.Text())
+		input = strings.TrimSpace(input)
 
 		// Skip empty lines
 		if input == "" {
 			continue
+		}
+
+		// Check for history commands (!!, !h, !<n>)
+		if strings.HasPrefix(input, "!") {
+			historyCmd := handleHistoryCommand(input, commandHistory)
+			if historyCmd == "" {
+				continue // History command was handled (e.g., !h), continue to next prompt
+			}
+			input = historyCmd // Use the command from history
+			fmt.Fprintf(os.Stderr, "%s\n", input) // Show what we're executing
 		}
 
 		// Check for exit command
@@ -275,6 +312,9 @@ func runInteractiveMode(endpoint, tenantID string, verbose, jsonOutput, allField
 		if err != nil {
 			category := categorizeError(err, "")
 			fmt.Fprintf(os.Stderr, "%s\n\n", formatError(category, err.Error()))
+			// Add failed command to history so user can recall and fix it
+			line.AppendHistory(input)
+			commandHistory = append(commandHistory, input)
 			continue
 		}
 
@@ -282,6 +322,9 @@ func runInteractiveMode(endpoint, tenantID string, verbose, jsonOutput, allField
 		if resp.Error != "" {
 			category := categorizeError(nil, resp.Error)
 			fmt.Fprintf(os.Stderr, "%s\n\n", formatError(category, resp.Error))
+			// Add failed command to history so user can recall and fix it
+			line.AppendHistory(input)
+			commandHistory = append(commandHistory, input)
 			continue
 		}
 
@@ -310,13 +353,65 @@ func runInteractiveMode(endpoint, tenantID string, verbose, jsonOutput, allField
 			printResultsNumbered(resp, query, verbose, allFields, session)
 		}
 
+		// Add successful query to both liner history and command history
+		line.AppendHistory(input)
+		commandHistory = append(commandHistory, input)
+
 		fmt.Fprintf(os.Stderr, "\n") // Add spacing between queries
 	}
+}
 
-	if err := scanner.Err(); err != nil {
-		fmt.Fprintf(os.Stderr, "Error reading input: %v\n", err)
-		os.Exit(1)
+// getHistoryFilePath returns the path to the command history file
+func getHistoryFilePath() string {
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return ".oql_history"
 	}
+	return filepath.Join(homeDir, ".oql_history")
+}
+
+// handleHistoryCommand processes c-shell style history commands
+// Returns the command to execute, or empty string if the history command was just informational
+func handleHistoryCommand(input string, history []string) string {
+	// !! - repeat last command
+	if input == "!!" {
+		if len(history) == 0 {
+			fmt.Fprintf(os.Stderr, "No previous command in history\n")
+			return ""
+		}
+		return history[len(history)-1]
+	}
+
+	// !h - show history
+	if input == "!h" || input == "!history" {
+		if len(history) == 0 {
+			fmt.Fprintf(os.Stderr, "No commands in history\n")
+			return ""
+		}
+		fmt.Fprintf(os.Stderr, "\nCommand History:\n")
+		for i, cmd := range history {
+			fmt.Fprintf(os.Stderr, "%4d  %s\n", i+1, cmd)
+		}
+		fmt.Fprintf(os.Stderr, "\n")
+		return ""
+	}
+
+	// !<n> - run command number n
+	if len(input) > 1 && input[0] == '!' {
+		numStr := input[1:]
+		n, err := strconv.Atoi(numStr)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Invalid history number: %s\n", numStr)
+			return ""
+		}
+		if n < 1 || n > len(history) {
+			fmt.Fprintf(os.Stderr, "History number %d out of range (1-%d)\n", n, len(history))
+			return ""
+		}
+		return history[n-1]
+	}
+
+	return ""
 }
 
 // isRefinementOperation checks if the input is a refinement operation
@@ -517,6 +612,13 @@ INTERACTIVE COMMANDS:
   focus <traceid>                Set context trace for subsequent operations
   unfocus                        Clear focus and return to list view
   undo                           Remove last refinement
+
+HISTORY COMMANDS:
+  !!                             Repeat last command
+  !h                             Show command history
+  !<n>                           Run command number n from history
+  Up/Down arrows                 Navigate through command history
+  Ctrl+R                         Search command history (reverse-i-search)
 
 FOCUS MODES:
   Trace-level focus              From trace list: 'focus #N' focuses on entire trace

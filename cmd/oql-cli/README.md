@@ -28,21 +28,45 @@ echo "signal=spans where duration > 100 limit 5" | oql-cli --tenant-id=0
 
 ### Interactive Mode
 
-Run the CLI without arguments to enter interactive mode (multi-line input):
+Run the CLI without arguments to enter interactive mode with full command-line editing:
 
 ```bash
 oql-cli --tenant-id=0
 ```
 
-Then type your query (can be multiple lines) and press `Ctrl+D` to submit:
+Interactive mode features:
+- **Command-line editing**: Use arrow keys, backspace, delete
+- **History navigation**: Press Up/Down to navigate through previous commands
+- **History search**: Press Ctrl+R for reverse-i-search
+- **Persistent history**: Commands are saved to `~/.oql_history`
+
+#### History Commands
+
+```bash
+!!      # Repeat last command
+!h      # Show command history with line numbers
+!5      # Run command #5 from history
+```
+
+#### Example Session
 
 ```
-Enter OQL query (Ctrl+D to submit):
-> signal=spans
-> where service_name == "checkout-service"
-> since 1h
-> limit 20
-^D
+oql> signal=spans limit 10
+[results displayed]
+
+oql> !!                           # Repeats: signal=spans limit 10
+[results displayed]
+
+oql> !h                           # Show history
+Command History:
+   1  signal=spans limit 10
+   2  signal=spans limit 10
+
+oql> signal=traces where error=true
+[results displayed]
+
+oql> [Press Up]                   # Shows previous command
+oql> signal=traces where error=true
 ```
 
 ### Verbose Output
