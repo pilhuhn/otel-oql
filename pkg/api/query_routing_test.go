@@ -248,7 +248,7 @@ func TestPromQLTranslation(t *testing.T) {
 			promql:   "http_requests_total[5m]",
 			tenantID: 0,
 			wantContains: []string{
-				"\"timestamp\" >= (now() - 300000)",
+				"timestamp >= (toUnixTimestamp(now()) * 1000 - 300000)",
 			},
 		},
 	}

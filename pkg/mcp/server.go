@@ -8,29 +8,29 @@ import (
 	"strings"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+	"github.com/pilhuhn/otel-oql/pkg/clickhouse"
 	"github.com/pilhuhn/otel-oql/pkg/oql"
-	"github.com/pilhuhn/otel-oql/pkg/pinot"
 	"github.com/pilhuhn/otel-oql/pkg/translator"
 )
 
 //go:embed OQL_REFERENCE.md
 var oqlReferenceContent string
 
-// PinotQuerier defines the interface for executing Pinot queries
-type PinotQuerier interface {
-	Query(ctx context.Context, sql string) (*pinot.QueryResponse, error)
+// ClickhouseQuerier defines the interface for executing Clickhouse queries
+type ClickhouseQuerier interface {
+	Query(ctx context.Context, sql string) (*clickhouse.QueryResponse, error)
 }
 
-// Server wraps the MCP SDK server with our Pinot client
+// Server wraps the MCP SDK server with our Clickhouse client
 type Server struct {
 	port        int
-	pinotClient PinotQuerier
+	pinotClient ClickhouseQuerier
 	mcpServer   *mcp.Server
 	httpServer  *http.Server
 }
 
 // NewServer creates a new MCP server using the official SDK
-func NewServer(port int, pinotClient PinotQuerier) *Server {
+func NewServer(port int, pinotClient ClickhouseQuerier) *Server {
 	// Create the MCP server using the SDK
 	mcpServer := mcp.NewServer(&mcp.Implementation{
 		Name:    "otel-oql-mcp",
@@ -182,8 +182,8 @@ func (s *Server) Stop(ctx context.Context) error {
 	return nil
 }
 
-// formatQueryResponse formats a Pinot query response as text
-func formatQueryResponse(sql string, resp *pinot.QueryResponse) string {
+// formatQueryResponse formats a Clickhouse query response as text
+func formatQueryResponse(sql string, resp *clickhouse.QueryResponse) string {
 	var sb strings.Builder
 
 	if len(resp.ResultTable.Rows) == 0 {

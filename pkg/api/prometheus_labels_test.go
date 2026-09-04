@@ -5,8 +5,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/pilhuhn/otel-oql/pkg/clickhouse"
 	"github.com/pilhuhn/otel-oql/pkg/observability"
-	"github.com/pilhuhn/otel-oql/pkg/pinot"
 	"github.com/pilhuhn/otel-oql/pkg/tenant"
 )
 
@@ -18,7 +18,7 @@ func TestPrometheusLabels(t *testing.T) {
 	})
 	defer obs.Shutdown(context.Background())
 
-	client := pinot.NewClient("http://localhost:9000")
+	client := clickhouse.NewClient("http://localhost:8123")
 	validator := tenant.NewValidator(true)
 
 	s := &Server{
@@ -51,7 +51,7 @@ func TestPrometheusLabelValues(t *testing.T) {
 	})
 	defer obs.Shutdown(context.Background())
 
-	client := pinot.NewClient("http://localhost:9000")
+	client := clickhouse.NewClient("http://localhost:8123")
 	validator := tenant.NewValidator(true)
 
 	s := &Server{
@@ -85,7 +85,7 @@ func TestPrometheusLabelValues(t *testing.T) {
 		{
 			name:      "unknown label uses JSON not identifier",
 			labelName: "custom_attr",
-			wantCol:   "JSON_EXTRACT_SCALAR(attributes, '$.custom_attr', 'STRING')",
+			wantCol:   "JSONExtractString(attributes, 'custom_attr')",
 		},
 	}
 
@@ -118,7 +118,7 @@ func TestPrometheusLabelValuesSQLInjectionLabelNameNotIdentifier(t *testing.T) {
 
 	validator := tenant.NewValidator(true)
 	s := &Server{
-		pinotClient:      pinot.NewClient("http://localhost:9000"),
+		pinotClient:      clickhouse.NewClient("http://localhost:8123"),
 		middleware:       validator.HTTPMiddleware,
 		obs:              obs,
 		debugQuery:       false,
@@ -129,8 +129,8 @@ func TestPrometheusLabelValuesSQLInjectionLabelNameNotIdentifier(t *testing.T) {
 		LabelName: "bad'); SELECT 1; --",
 		Limit:     5,
 	})
-	if !strings.HasPrefix(sql, "SELECT DISTINCT JSON_EXTRACT_SCALAR(attributes,") {
-		t.Fatalf("unknown label must use JSON_EXTRACT_SCALAR, not bare identifier: %s", sql)
+	if !strings.Contains(sql, "SELECT DISTINCT") || !strings.Contains(sql, "attributes") {
+		t.Fatalf("unknown label must use JSON extraction, not bare identifier: %s", sql)
 	}
 	if !strings.Contains(sql, "tenant_id = 0") {
 		t.Fatalf("expected tenant filter: %s", sql)

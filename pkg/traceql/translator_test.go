@@ -128,7 +128,7 @@ func TestTranslator_SpanAttributes(t *testing.T) {
 		{
 			name:        "custom attribute JSON extraction",
 			query:       `{span.custom.field = "value"}`,
-			wantInSQL:   "JSON_EXTRACT_SCALAR(attributes, '$.custom.field', 'STRING') = 'value'",
+			wantInSQL:   "JSONExtractString(attributes, 'custom.field') = 'value'",
 			description: "custom attributes use JSON extraction",
 		},
 		{
@@ -177,7 +177,7 @@ func TestTranslator_ResourceAttributes(t *testing.T) {
 		{
 			name:        "custom resource attribute",
 			query:       `{resource.environment = "production"}`,
-			wantInSQL:   "JSON_EXTRACT_SCALAR(resource_attributes, '$.environment', 'STRING') = 'production'",
+			wantInSQL:   "JSONExtractString(resource_attributes, 'environment') = 'production'",
 			description: "custom resource attributes use JSON extraction",
 		},
 	}
@@ -273,12 +273,12 @@ func TestTranslator_Operators(t *testing.T) {
 		{
 			name:      "regex match",
 			query:     `{name =~ "HTTP.*"}`,
-			wantInSQL: "REGEXP_LIKE(name, 'HTTP.*')",
+			wantInSQL: "match(name, 'HTTP.*')",
 		},
 		{
 			name:      "regex not match",
 			query:     `{name !~ "POST.*"}`,
-			wantInSQL: "NOT REGEXP_LIKE(name, 'POST.*')",
+			wantInSQL: "NOT match(name, 'POST.*')",
 		},
 	}
 

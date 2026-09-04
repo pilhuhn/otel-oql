@@ -2,14 +2,13 @@ package integration
 
 import (
 	"context"
-	"encoding/json"
 	"flag"
 	"fmt"
 	"net/http"
 	"os"
 	"testing"
 
-	"github.com/pilhuhn/otel-oql/pkg/pinot"
+	"github.com/pilhuhn/otel-oql/pkg/clickhouse"
 )
 
 // TestMain handles setup and teardown for integration tests
@@ -20,35 +19,26 @@ func TestMain(m *testing.M) {
 		os.Exit(0)
 	}
 
-	// Check if Pinot is running
-	if !isPinotAvailable() {
+	// Check if Clickhouse is running
+	if !isClickhouseAvailable() {
 		if os.Getenv("REQUIRE_INTEGRATION") == "1" {
-			fmt.Println("❌ Pinot is not running or not accessible at " + pinotBrokerURL)
-			fmt.Println("Start Pinot with: docker-compose up -d")
-			fmt.Println("Then ensure schemas are created: ./otel-oql setup-schema --pinot-url=" + pinotControllerURL)
+			fmt.Println("❌ Clickhouse is not running or not accessible at " + clickhouseURL)
+			fmt.Println("Start Clickhouse with: podman-compose up -d")
+			fmt.Println("Then ensure schemas are created: ./otel-oql setup-schema --clickhouse-url=" + clickhouseURL)
 			os.Exit(1)
 		}
-		fmt.Println("⚠️  skip integration tests: Pinot not reachable at " + pinotBrokerURL)
-		fmt.Println("Start Pinot with: docker-compose up -d, then: go test ./pkg/integration/... -count=1")
-		fmt.Println("Or set REQUIRE_INTEGRATION=1 to fail when Pinot is down (e.g. CI with Pinot).")
+		fmt.Println("⚠️  skip integration tests: Clickhouse not reachable at " + clickhouseURL)
+		fmt.Println("Start Clickhouse with: podman-compose up -d, then: go test ./pkg/integration/... -count=1")
+		fmt.Println("Or set REQUIRE_INTEGRATION=1 to fail when Clickhouse is down (e.g. CI with Clickhouse).")
 		os.Exit(0)
 	}
 
-	fmt.Println("✅ Pinot is running and accessible")
-
-	// Verify schemas exist
-	if err := verifySchemas(); err != nil {
-		fmt.Println("❌ Schema verification failed:", err)
-		fmt.Println("Create schemas with: ./otel-oql setup-schema --pinot-url=" + pinotControllerURL)
-		os.Exit(1)
-	}
-
-	fmt.Println("✅ All required schemas exist")
+	fmt.Println("✅ Clickhouse is running and accessible")
 
 	// Check if OTEL-OQL service is running
 	if !isOtelOQLAvailable() {
 		fmt.Println("⚠️  OTEL-OQL service is not running")
-		fmt.Println("Start service with: ./otel-oql --test-mode --pinot-url=" + pinotBrokerURL + " --kafka-brokers=localhost:9092")
+		fmt.Println("Start service with: ./otel-oql --test-mode --clickhouse-url=" + clickhouseURL)
 		fmt.Println("Some tests will be skipped")
 	} else {
 		fmt.Println("✅ OTEL-OQL service is running")
@@ -67,10 +57,9 @@ func TestMain(m *testing.M) {
 	os.Exit(code)
 }
 
-// isPinotAvailable checks if Pinot is running and accessible
-func isPinotAvailable() bool {
-	// Just check if Pinot health endpoint responds
-	resp, err := http.Get(pinotBrokerURL + "/health")
+// isClickhouseAvailable checks if Clickhouse is running and accessible
+func isClickhouseAvailable() bool {
+	resp, err := http.Get(clickhouseURL + "/ping")
 	if err != nil {
 		return false
 	}
@@ -85,51 +74,29 @@ func isOtelOQLAvailable() bool {
 	return err == nil
 }
 
-// verifySchemas checks that all required tables exist in Pinot
+// verifySchemas checks that all required tables exist in Clickhouse
 func verifySchemas() error {
-	// Check if tables exist via the /tables endpoint (controller only)
-	resp, err := http.Get(pinotControllerURL + "/tables")
-	if err != nil {
-		return fmt.Errorf("failed to get tables list: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("failed to get tables list: status %d", resp.StatusCode)
-	}
-
-	var tablesResp struct {
-		Tables []string `json:"tables"`
-	}
-
-	if err := json.NewDecoder(resp.Body).Decode(&tablesResp); err != nil {
-		return fmt.Errorf("failed to decode tables response: %w", err)
-	}
+	client := clickhouse.NewClient(clickhouseURL)
+	ctx := context.Background()
 
 	requiredTables := []string{"otel_spans", "otel_metrics", "otel_logs"}
-	tableMap := make(map[string]bool)
-	for _, table := range tablesResp.Tables {
-		tableMap[table] = true
-	}
-
-	for _, required := range requiredTables {
-		if !tableMap[required] {
-			return fmt.Errorf("table %s not found", required)
+	for _, table := range requiredTables {
+		sql := fmt.Sprintf("SELECT count() FROM %s LIMIT 1", table)
+		_, err := client.Query(ctx, sql)
+		if err != nil {
+			return fmt.Errorf("table %s not found or not queryable: %w", table, err)
 		}
 	}
-
 	return nil
 }
 
 // cleanupAll removes all test data from all tables
 func cleanupAll() {
-	client := pinot.NewClient(pinotBrokerURL)
+	client := clickhouse.NewClient(clickhouseURL)
 	ctx := context.Background()
 
 	tables := []string{"otel_spans", "otel_metrics", "otel_logs"}
 	for _, table := range tables {
-		// Note: This assumes tenant_id 0-1000 are test tenants
-		// In production, use a dedicated test database/namespace
 		sql := fmt.Sprintf("DELETE FROM %s WHERE tenant_id < 1000", table)
 		_, _ = client.Query(ctx, sql)
 	}
@@ -137,8 +104,12 @@ func cleanupAll() {
 
 // cleanupTestTenants removes test data for specific tenant IDs used in tests
 func cleanupTestTenants() {
-	// REALTIME tables don't support DELETE in Pinot, so we can't actually clean them
-	// The best we can do is note that old data will persist
-	// In a real system, you'd use time-based retention or dedicated test databases
-	fmt.Println("Note: REALTIME tables accumulate data - old test data may remain")
+	client := clickhouse.NewClient(clickhouseURL)
+	ctx := context.Background()
+
+	tables := []string{"otel_spans", "otel_metrics", "otel_logs"}
+	for _, table := range tables {
+		sql := fmt.Sprintf("ALTER TABLE %s DELETE WHERE tenant_id < 1000", table)
+		_, _ = client.Query(ctx, sql)
+	}
 }

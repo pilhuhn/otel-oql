@@ -31,7 +31,7 @@ func TestSpanIngestionAndQuery(t *testing.T) {
 
 	// Query Pinot directly to verify data was stored
 	sql := fmt.Sprintf("SELECT * FROM otel_spans WHERE tenant_id = %d AND trace_id = '%s'", testTenantID, traceID)
-	results, err := QueryPinot(t, sql)
+	results, err := QueryClickhouse(t, sql)
 	require.NoError(t, err, "Failed to query Pinot")
 	require.NotEmpty(t, results, "No spans found in Pinot")
 
@@ -80,7 +80,7 @@ func TestMetricWithExemplarIngestion(t *testing.T) {
 	// Query Pinot to verify exemplar was captured
 	// Use unique service name to avoid matching old test data
 	sql := fmt.Sprintf("SELECT * FROM otel_metrics WHERE tenant_id = %d AND metric_name = '%s' AND service_name = '%s'", testTenantID, metricName, serviceName)
-	results, err := QueryPinot(t, sql)
+	results, err := QueryClickhouse(t, sql)
 	require.NoError(t, err, "Failed to query Pinot")
 	require.NotEmpty(t, results, "No metrics found in Pinot")
 
@@ -141,7 +141,7 @@ func TestLogIngestionAndCorrelation(t *testing.T) {
 
 	// Query Pinot to verify log was stored
 	sql := fmt.Sprintf("SELECT * FROM otel_logs WHERE tenant_id = %d AND trace_id = '%s'", testTenantID, traceID)
-	results, err := QueryPinot(t, sql)
+	results, err := QueryClickhouse(t, sql)
 	require.NoError(t, err, "Failed to query Pinot")
 	require.NotEmpty(t, results, "No logs found in Pinot")
 
@@ -177,7 +177,7 @@ func TestAttributeExtraction(t *testing.T) {
 
 	// Query Pinot
 	sql := fmt.Sprintf("SELECT * FROM otel_spans WHERE tenant_id = %d AND trace_id = '%s'", testTenantID, traceID)
-	results, err := QueryPinot(t, sql)
+	results, err := QueryClickhouse(t, sql)
 	require.NoError(t, err, "Failed to query Pinot")
 	require.NotEmpty(t, results, "No spans found")
 
@@ -218,7 +218,7 @@ func TestMultiTenantIsolation(t *testing.T) {
 
 	// Query tenant 1 - should only see tenant 1 data
 	sql1 := fmt.Sprintf("SELECT * FROM otel_spans WHERE tenant_id = %d", tenant1ID)
-	results1, err := QueryPinot(t, sql1)
+	results1, err := QueryClickhouse(t, sql1)
 	require.NoError(t, err)
 	require.NotEmpty(t, results1)
 
@@ -228,7 +228,7 @@ func TestMultiTenantIsolation(t *testing.T) {
 
 	// Query tenant 2 - should only see tenant 2 data
 	sql2 := fmt.Sprintf("SELECT * FROM otel_spans WHERE tenant_id = %d", tenant2ID)
-	results2, err := QueryPinot(t, sql2)
+	results2, err := QueryClickhouse(t, sql2)
 	require.NoError(t, err)
 	require.NotEmpty(t, results2)
 
@@ -342,7 +342,7 @@ func TestEndToEndQueryFlow(t *testing.T) {
 
 	// 2. Verify in Pinot
 	sql := fmt.Sprintf("SELECT * FROM otel_spans WHERE tenant_id = %d AND trace_id = '%s'", testTenantID, traceID)
-	pinotResults, err := QueryPinot(t, sql)
+	pinotResults, err := QueryClickhouse(t, sql)
 	require.NoError(t, err, "Failed to query Pinot")
 	require.NotEmpty(t, pinotResults, "No data in Pinot")
 

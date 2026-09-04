@@ -11,7 +11,7 @@ import (
 	"github.com/pilhuhn/otel-oql/pkg/logql"
 	"github.com/pilhuhn/otel-oql/pkg/observability"
 	"github.com/pilhuhn/otel-oql/pkg/oql"
-	"github.com/pilhuhn/otel-oql/pkg/pinot"
+	"github.com/pilhuhn/otel-oql/pkg/clickhouse"
 	"github.com/pilhuhn/otel-oql/pkg/promql"
 	"github.com/pilhuhn/otel-oql/pkg/sqlutil"
 	"github.com/pilhuhn/otel-oql/pkg/tenant"
@@ -23,7 +23,7 @@ import (
 type Server struct {
 	port             int
 	middleware       func(http.Handler) http.Handler
-	pinotClient      *pinot.Client
+	pinotClient      *clickhouse.Client
 	httpServer       *http.Server
 	obs              *observability.Observability
 	debugQuery       bool
@@ -31,7 +31,7 @@ type Server struct {
 }
 
 // NewServer creates a new query API server
-func NewServer(port int, middleware func(http.Handler) http.Handler, pinotClient *pinot.Client, obs *observability.Observability, debugQuery, debugTranslation bool) *Server {
+func NewServer(port int, middleware func(http.Handler) http.Handler, pinotClient *clickhouse.Client, obs *observability.Observability, debugQuery, debugTranslation bool) *Server {
 	return &Server{
 		port:             port,
 		middleware:       middleware,
@@ -262,7 +262,7 @@ func (s *Server) handleQuery(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(response)
 }
 
-// executeQuery executes a SQL query against Pinot
+// executeQuery executes a SQL query against Clickhouse
 func (s *Server) executeQuery(ctx context.Context, sql string) (QueryResult, error) {
 	resp, err := s.pinotClient.Query(ctx, sql)
 	if err != nil {
@@ -332,7 +332,7 @@ func (s *Server) executeExpandQuery(ctx context.Context, sql string, tenantID in
 	}
 	resp1, err := s.pinotClient.Query(ctx, baseSQL)
 	if err != nil {
-		// Pass through the Pinot error (already user-friendly)
+		// Pass through the Clickhouse error (already user-friendly)
 		return QueryResult{}, err
 	}
 
@@ -395,7 +395,7 @@ func (s *Server) executeExpandQuery(ctx context.Context, sql string, tenantID in
 	// Step 4: Execute the expand query
 	resp2, err := s.pinotClient.Query(ctx, expandSQL)
 	if err != nil {
-		// Pass through the Pinot error (already user-friendly)
+		// Pass through the Clickhouse error (already user-friendly)
 		return QueryResult{}, err
 	}
 
@@ -502,7 +502,7 @@ func (s *Server) executeCorrelateQuery(ctx context.Context, sql string, tenantID
 		// Base query is regular SQL - execute it directly
 		resp1, err := s.pinotClient.Query(ctx, baseSQL)
 		if err != nil {
-			// Pass through the Pinot error (already user-friendly)
+			// Pass through the Clickhouse error (already user-friendly)
 			return nil, err
 		}
 		baseResult = QueryResult{

@@ -81,7 +81,7 @@ func TestTempoEndpoints(t *testing.T) {
 			// Span attributes - custom (JSON extraction)
 			{
 				tagName:    "span.custom.field",
-				wantColumn: "JSON_EXTRACT_SCALAR(attributes, '$.custom.field', 'STRING')",
+				wantColumn: "JSONExtractString(attributes, 'custom.field')",
 				wantErr:    false,
 			},
 			// Resource attributes - native columns
@@ -93,7 +93,7 @@ func TestTempoEndpoints(t *testing.T) {
 			// Resource attributes - custom (JSON extraction)
 			{
 				tagName:    "resource.environment",
-				wantColumn: "JSON_EXTRACT_SCALAR(resource_attributes, '$.environment', 'STRING')",
+				wantColumn: "JSONExtractString(resource_attributes, 'environment')",
 				wantErr:    false,
 			},
 			// Unknown tag
@@ -150,9 +150,9 @@ func TestTempoEndpoints(t *testing.T) {
 			{
 				name:     "JSON extraction column",
 				tenantID: 0,
-				column:   "JSON_EXTRACT_SCALAR(attributes, '$.custom.field', 'STRING')",
+				column:   "JSONExtractString(attributes, 'custom.field')",
 				wantContains: []string{
-					"SELECT DISTINCT JSON_EXTRACT_SCALAR(attributes, '$.custom.field', 'STRING') FROM otel_spans",
+					"SELECT DISTINCT JSONExtractString(attributes, 'custom.field') FROM otel_spans",
 					"tenant_id = 0",
 				},
 			},

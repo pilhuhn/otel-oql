@@ -16,7 +16,7 @@ func MetricLabelDistinctExpr(labelName string) string {
 	if col := GetMetricNativeColumn(labelName); col != "" {
 		return col
 	}
-	return fmt.Sprintf("JSON_EXTRACT_SCALAR(attributes, %s, 'STRING')", sqlutil.JSONObjectKeyPathLiteral(labelName))
+	return fmt.Sprintf("JSONExtractString(attributes, %s)", sqlutil.StringLiteral(labelName))
 }
 
 // LogLabelDistinctExpr returns a SQL expression for selecting distinct values of a
@@ -26,5 +26,5 @@ func LogLabelDistinctExpr(labelName string) string {
 	if col := GetLogNativeColumn(labelName); col != "" {
 		return col
 	}
-	return fmt.Sprintf("JSON_EXTRACT_SCALAR(attributes, %s, 'STRING')", sqlutil.JSONObjectKeyPathLiteral(labelName))
+	return fmt.Sprintf("JSONExtractString(attributes, %s)", sqlutil.StringLiteral(labelName))
 }

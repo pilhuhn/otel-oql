@@ -3,8 +3,6 @@ package translator
 import (
 	"fmt"
 	"unicode"
-
-	"github.com/pilhuhn/otel-oql/pkg/sqlutil"
 )
 
 const maxAttributeKeyLen = 512
@@ -50,8 +48,3 @@ func validateAttributeKey(key string) error {
 	return nil
 }
 
-// jsonPathLiteral returns a SQL string literal containing a JSON path for a top-level key
-// (e.g. $.my.key). The key is embedded using standard SQL string escaping.
-func jsonPathLiteral(attributeKey string) string {
-	return sqlutil.JSONObjectKeyPathLiteral(attributeKey)
-}

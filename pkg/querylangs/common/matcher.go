@@ -19,7 +19,7 @@ func TranslateLabelMatcher(matcher *labels.Matcher, getNativeColumn func(string)
 		fieldRef = nativeCol
 	} else {
 		// Use JSON extraction for attributes
-		fieldRef = fmt.Sprintf("JSON_EXTRACT_SCALAR(attributes, %s, 'STRING')", sqlutil.JSONObjectKeyPathLiteral(labelName))
+		fieldRef = fmt.Sprintf("JSONExtractString(attributes, %s)", sqlutil.StringLiteral(labelName))
 	}
 
 	switch matcher.Type {
@@ -28,16 +28,15 @@ func TranslateLabelMatcher(matcher *labels.Matcher, getNativeColumn func(string)
 	case labels.MatchNotEqual:
 		return fmt.Sprintf("%s <> %s", fieldRef, sqlutil.StringLiteral(labelValue)), nil
 	case labels.MatchRegexp:
-		// Pinot uses REGEXP_LIKE for regex matching
-		return fmt.Sprintf("REGEXP_LIKE(%s, %s)", fieldRef, sqlutil.StringLiteral(labelValue)), nil
+		return fmt.Sprintf("match(%s, %s)", fieldRef, sqlutil.StringLiteral(labelValue)), nil
 	case labels.MatchNotRegexp:
-		return fmt.Sprintf("NOT REGEXP_LIKE(%s, %s)", fieldRef, sqlutil.StringLiteral(labelValue)), nil
+		return fmt.Sprintf("NOT match(%s, %s)", fieldRef, sqlutil.StringLiteral(labelValue)), nil
 	default:
 		return "", fmt.Errorf("unsupported matcher type: %s", matcher.Type)
 	}
 }
 
-// GetMetricNativeColumn maps Prometheus metric label names to native Pinot columns
+// GetMetricNativeColumn maps Prometheus metric label names to native Clickhouse columns
 func GetMetricNativeColumn(labelName string) string {
 	nativeColumns := map[string]string{
 		// Metric attributes
@@ -66,7 +65,7 @@ func GetMetricNativeColumn(labelName string) string {
 	return ""
 }
 
-// GetLogNativeColumn maps log label names to native Pinot columns
+// GetLogNativeColumn maps log label names to native Clickhouse columns
 func GetLogNativeColumn(labelName string) string {
 	nativeColumns := map[string]string{
 		// Trace correlation (CRITICAL for correlate operations!)

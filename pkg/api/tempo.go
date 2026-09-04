@@ -271,10 +271,10 @@ func (s *Server) mapSpanAttributeToColumn(attrName string) string {
 	}
 
 	// Not a native column - use JSON extraction
-	return fmt.Sprintf("JSON_EXTRACT_SCALAR(attributes, %s, 'STRING')", sqlutil.JSONObjectKeyPathLiteral(attrName))
+	return fmt.Sprintf("JSONExtractString(attributes, %s)", sqlutil.StringLiteral(attrName))
 }
 
-// mapResourceAttributeToColumn maps a resource attribute to Pinot column
+// mapResourceAttributeToColumn maps a resource attribute to Clickhouse column
 func (s *Server) mapResourceAttributeToColumn(attrName string) string {
 	// Map OTel resource semantic conventions to native columns
 	if attrName == "service.name" {
@@ -282,7 +282,7 @@ func (s *Server) mapResourceAttributeToColumn(attrName string) string {
 	}
 
 	// Not a native column - use JSON extraction
-	return fmt.Sprintf("JSON_EXTRACT_SCALAR(resource_attributes, %s, 'STRING')", sqlutil.JSONObjectKeyPathLiteral(attrName))
+	return fmt.Sprintf("JSONExtractString(resource_attributes, %s)", sqlutil.StringLiteral(attrName))
 }
 
 // buildTempoTagValuesSQL builds SQL to get distinct values for a tag

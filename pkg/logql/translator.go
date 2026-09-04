@@ -9,7 +9,7 @@ import (
 	"github.com/pilhuhn/otel-oql/pkg/sqlutil"
 )
 
-// Translator translates LogQL queries to Pinot SQL
+// Translator translates LogQL queries to Clickhouse SQL
 type Translator struct {
 	tenantID int
 	start    *time.Time // Optional start time for range queries
@@ -21,7 +21,7 @@ func NewTranslator(tenantID int) *Translator {
 	return &Translator{tenantID: tenantID}
 }
 
-// TranslateQuery translates a LogQL query to Pinot SQL
+// TranslateQuery translates a LogQL query to Clickhouse SQL
 func (t *Translator) TranslateQuery(logql string) ([]string, error) {
 	// Parse the LogQL query
 	parser := NewParser(logql)
@@ -55,7 +55,7 @@ func (t *Translator) TranslateQuery(logql string) ([]string, error) {
 	}
 }
 
-// TranslateQueryWithTimeRange translates a LogQL query to Pinot SQL with time range filter
+// TranslateQueryWithTimeRange translates a LogQL query to Clickhouse SQL with time range filter
 func (t *Translator) TranslateQueryWithTimeRange(logql string, start, end *time.Time) ([]string, error) {
 	// Store time range in translator
 	t.start = start
@@ -94,7 +94,7 @@ func (t *Translator) translateLogRangeExpr(expr *LogRangeExpr) (string, error) {
 	if t.start != nil && t.end != nil {
 		startMillis := t.start.UnixMilli()
 		endMillis := t.end.UnixMilli()
-		sql += fmt.Sprintf(" AND \"timestamp\" >= %d AND \"timestamp\" <= %d", startMillis, endMillis)
+		sql += fmt.Sprintf(" AND timestamp >= %d AND timestamp <= %d", startMillis, endMillis)
 	}
 
 	return sql, nil
@@ -130,7 +130,7 @@ func (t *Translator) translateMetricExpr(expr *MetricExpr) (string, error) {
 		// Use explicit time range from API parameters
 		startMillis := t.start.UnixMilli()
 		endMillis := t.end.UnixMilli()
-		sql += fmt.Sprintf(" AND \"timestamp\" >= %d AND \"timestamp\" <= %d", startMillis, endMillis)
+		sql += fmt.Sprintf(" AND timestamp >= %d AND timestamp <= %d", startMillis, endMillis)
 	} else if expr.Range > 0 {
 		// Use relative time range from query (reuse common code!)
 		timeFilter := common.TranslateTimeRange(expr.Range)
@@ -196,11 +196,11 @@ func (t *Translator) translateLineFilter(filter *LineFilter) (string, error) {
 
 	case "|~":
 		// Regex match
-		return fmt.Sprintf("REGEXP_LIKE(%s, %s)", bodyField, sqlutil.StringLiteral(filter.Value)), nil
+		return fmt.Sprintf("match(%s, %s)", bodyField, sqlutil.StringLiteral(filter.Value)), nil
 
 	case "!~":
 		// Regex not match
-		return fmt.Sprintf("NOT REGEXP_LIKE(%s, %s)", bodyField, sqlutil.StringLiteral(filter.Value)), nil
+		return fmt.Sprintf("NOT match(%s, %s)", bodyField, sqlutil.StringLiteral(filter.Value)), nil
 
 	default:
 		return "", fmt.Errorf("unsupported line filter operator: %s", filter.Operator)
@@ -248,7 +248,7 @@ func (t *Translator) applyAggregation(baseSQL string, agg *Aggregator) (string, 
 		if nativeColumn != "" {
 			groupFields = append(groupFields, nativeColumn)
 		} else {
-			groupFields = append(groupFields, fmt.Sprintf("JSON_EXTRACT_SCALAR(attributes, %s, 'STRING')", sqlutil.JSONObjectKeyPathLiteral(label)))
+			groupFields = append(groupFields, fmt.Sprintf("JSONExtractString(attributes, %s)", sqlutil.StringLiteral(label)))
 		}
 	}
 
@@ -293,7 +293,5 @@ func (t *Translator) applyAggregation(baseSQL string, agg *Aggregator) (string, 
 // translateScalarExpr translates a scalar expression to SQL
 // This handles connection tests like vector(1)+vector(1) from Grafana
 func (t *Translator) translateScalarExpr(expr *ScalarExpr) string {
-	// Return a SQL query that produces this scalar value
-	// Pinot requires a FROM clause, so we use otel_logs with LIMIT 1
 	return fmt.Sprintf("SELECT %f AS value FROM otel_logs LIMIT 1", expr.Value)
 }

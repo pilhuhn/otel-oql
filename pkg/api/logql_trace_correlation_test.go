@@ -88,7 +88,7 @@ func TestLogQLTraceCorrelation(t *testing.T) {
 				"SELECT trace_id, COUNT(*) FROM otel_logs",
 				"WHERE tenant_id = 0",
 				"AND service_name = 'api'",
-				"AND \"timestamp\" >= (now() - 3600000)",
+				"AND timestamp >= (toUnixTimestamp(now()) * 1000 - 3600000)",
 				"GROUP BY trace_id",
 			},
 			description: "aggregate logs by trace_id",
@@ -99,7 +99,7 @@ func TestLogQLTraceCorrelation(t *testing.T) {
 			wantContains: []string{
 				"SELECT * FROM otel_logs",
 				"WHERE tenant_id = 0",
-				"AND REGEXP_LIKE(trace_id, 'abc.*')",
+				"AND match(trace_id, 'abc.*')",
 			},
 			description: "regex matching on trace_id uses native column",
 		},
@@ -247,17 +247,17 @@ func TestLogQLCustomAttributeUsesJSON(t *testing.T) {
 		{
 			name:     "custom label",
 			logql:    `{custom_label="value"}`,
-			wantJSON: "JSON_EXTRACT_SCALAR(attributes, '$.custom_label', 'STRING') = 'value'",
+			wantJSON: "JSONExtractString(attributes, 'custom_label') = 'value'",
 		},
 		{
 			name:     "application label",
 			logql:    `{app="myapp"}`,
-			wantJSON: "JSON_EXTRACT_SCALAR(attributes, '$.app', 'STRING') = 'myapp'",
+			wantJSON: "JSONExtractString(attributes, 'app') = 'myapp'",
 		},
 		{
 			name:     "version label",
 			logql:    `{version="1.2.3"}`,
-			wantJSON: "JSON_EXTRACT_SCALAR(attributes, '$.version', 'STRING') = '1.2.3'",
+			wantJSON: "JSONExtractString(attributes, 'version') = '1.2.3'",
 		},
 	}
 

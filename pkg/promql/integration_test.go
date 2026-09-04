@@ -23,7 +23,7 @@ func TestComplexQueries(t *testing.T) {
 				return contains(sql, "tenant_id = 42") &&
 					contains(sql, "metric_name = 'http.requests.total'") &&
 					contains(sql, "job = 'api'") &&
-					contains(sql, `"timestamp" >= (now() - 300000)`) &&
+					contains(sql, `timestamp >= (toUnixTimestamp(now()) * 1000 - 300000)`) &&
 					contains(sql, "SELECT")
 			},
 		},
@@ -43,7 +43,7 @@ func TestComplexQueries(t *testing.T) {
 			wantErr: false,
 			checkSQL: func(sql string) bool {
 				return contains(sql, "COUNT(*)") &&
-					contains(sql, "REGEXP_LIKE(http_status_code, '5..')")
+					contains(sql, "match(http_status_code, '5..')")
 			},
 		},
 	}
