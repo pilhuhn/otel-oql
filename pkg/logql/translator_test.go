@@ -36,12 +36,12 @@ func TestTranslateQuery_LogRangeExpr(t *testing.T) {
 		{
 			name:    "stream selector with regex matcher",
 			logql:   `{job=~"var.*"}`,
-			wantSQL: `SELECT * FROM otel_logs WHERE tenant_id = 0 AND REGEXP_LIKE(job, 'var.*')`,
+			wantSQL: `SELECT * FROM otel_logs WHERE tenant_id = 0 AND match(job, 'var.*')`,
 		},
 		{
 			name:    "stream selector with negative regex matcher",
 			logql:   `{job="varlogs", level!~"debug.*"}`,
-			wantSQL: `SELECT * FROM otel_logs WHERE tenant_id = 0 AND job = 'varlogs' AND NOT REGEXP_LIKE(log_level, 'debug.*')`,
+			wantSQL: `SELECT * FROM otel_logs WHERE tenant_id = 0 AND job = 'varlogs' AND NOT match(log_level, 'debug.*')`,
 		},
 		{
 			name:    "line filter contains",
@@ -56,12 +56,12 @@ func TestTranslateQuery_LogRangeExpr(t *testing.T) {
 		{
 			name:    "line filter regex match",
 			logql:   `{job="varlogs"} |~ "error|fail"`,
-			wantSQL: `SELECT * FROM otel_logs WHERE tenant_id = 0 AND job = 'varlogs' AND REGEXP_LIKE(body, 'error|fail')`,
+			wantSQL: `SELECT * FROM otel_logs WHERE tenant_id = 0 AND job = 'varlogs' AND match(body, 'error|fail')`,
 		},
 		{
 			name:    "line filter regex not match",
 			logql:   `{job="varlogs"} !~ "debug|trace"`,
-			wantSQL: `SELECT * FROM otel_logs WHERE tenant_id = 0 AND job = 'varlogs' AND NOT REGEXP_LIKE(body, 'debug|trace')`,
+			wantSQL: `SELECT * FROM otel_logs WHERE tenant_id = 0 AND job = 'varlogs' AND NOT match(body, 'debug|trace')`,
 		},
 		{
 			name:    "multiple line filters",
@@ -142,77 +142,77 @@ func TestTranslateQuery_MetricExpr(t *testing.T) {
 		{
 			name:    "count_over_time simple",
 			logql:   `count_over_time({job="varlogs"}[5m])`,
-			wantSQL: `SELECT COUNT(*) FROM otel_logs WHERE tenant_id = 0 AND job = 'varlogs' AND "timestamp" >= (now() - 300000)`,
+			wantSQL: `SELECT COUNT(*) FROM otel_logs WHERE tenant_id = 0 AND job = 'varlogs' AND timestamp >= (toUnixTimestamp(now()) * 1000 - 300000)`,
 		},
 		{
 			name:    "count_over_time with native column",
 			logql:   `count_over_time({level="error"}[1h])`,
-			wantSQL: `SELECT COUNT(*) FROM otel_logs WHERE tenant_id = 0 AND log_level = 'error' AND "timestamp" >= (now() - 3600000)`,
+			wantSQL: `SELECT COUNT(*) FROM otel_logs WHERE tenant_id = 0 AND log_level = 'error' AND timestamp >= (toUnixTimestamp(now()) * 1000 - 3600000)`,
 		},
 		{
 			name:    "rate function",
 			logql:   `rate({job="varlogs"}[5m])`,
-			wantSQL: `SELECT COUNT(*) FROM otel_logs WHERE tenant_id = 0 AND job = 'varlogs' AND "timestamp" >= (now() - 300000)`,
+			wantSQL: `SELECT COUNT(*) FROM otel_logs WHERE tenant_id = 0 AND job = 'varlogs' AND timestamp >= (toUnixTimestamp(now()) * 1000 - 300000)`,
 		},
 		{
 			name:    "bytes_over_time",
 			logql:   `bytes_over_time({job="varlogs"}[5m])`,
-			wantSQL: `SELECT SUM(LENGTH(body)) FROM otel_logs WHERE tenant_id = 0 AND job = 'varlogs' AND "timestamp" >= (now() - 300000)`,
+			wantSQL: `SELECT SUM(LENGTH(body)) FROM otel_logs WHERE tenant_id = 0 AND job = 'varlogs' AND timestamp >= (toUnixTimestamp(now()) * 1000 - 300000)`,
 		},
 		{
 			name:    "bytes_rate",
 			logql:   `bytes_rate({job="varlogs"}[10m])`,
-			wantSQL: `SELECT SUM(LENGTH(body)) FROM otel_logs WHERE tenant_id = 0 AND job = 'varlogs' AND "timestamp" >= (now() - 600000)`,
+			wantSQL: `SELECT SUM(LENGTH(body)) FROM otel_logs WHERE tenant_id = 0 AND job = 'varlogs' AND timestamp >= (toUnixTimestamp(now()) * 1000 - 600000)`,
 		},
 		{
 			name:    "count_over_time with line filter",
 			logql:   `count_over_time({job="varlogs"} |= "error"[5m])`,
-			wantSQL: `SELECT COUNT(*) FROM otel_logs WHERE tenant_id = 0 AND job = 'varlogs' AND body LIKE '%error%' AND "timestamp" >= (now() - 300000)`,
+			wantSQL: `SELECT COUNT(*) FROM otel_logs WHERE tenant_id = 0 AND job = 'varlogs' AND body LIKE '%error%' AND timestamp >= (toUnixTimestamp(now()) * 1000 - 300000)`,
 		},
 		{
 			name:    "count_over_time with multiple filters",
 			logql:   `count_over_time({job="varlogs"} |= "error" != "timeout"[1h])`,
-			wantSQL: `SELECT COUNT(*) FROM otel_logs WHERE tenant_id = 0 AND job = 'varlogs' AND body LIKE '%error%' AND body NOT LIKE '%timeout%' AND "timestamp" >= (now() - 3600000)`,
+			wantSQL: `SELECT COUNT(*) FROM otel_logs WHERE tenant_id = 0 AND job = 'varlogs' AND body LIKE '%error%' AND body NOT LIKE '%timeout%' AND timestamp >= (toUnixTimestamp(now()) * 1000 - 3600000)`,
 		},
 		{
 			name:    "sum aggregation",
 			logql:   `sum(count_over_time({job="varlogs"}[5m]))`,
-			wantSQL: `SELECT COUNT(*) FROM otel_logs WHERE tenant_id = 0 AND job = 'varlogs' AND "timestamp" >= (now() - 300000)`,
+			wantSQL: `SELECT COUNT(*) FROM otel_logs WHERE tenant_id = 0 AND job = 'varlogs' AND timestamp >= (toUnixTimestamp(now()) * 1000 - 300000)`,
 		},
 		{
 			name:    "sum by level",
 			logql:   `sum by (level) (count_over_time({job="varlogs"}[5m]))`,
-			wantSQL: `SELECT log_level, COUNT(*) FROM otel_logs WHERE tenant_id = 0 AND job = 'varlogs' AND "timestamp" >= (now() - 300000) GROUP BY log_level`,
+			wantSQL: `SELECT log_level, COUNT(*) FROM otel_logs WHERE tenant_id = 0 AND job = 'varlogs' AND timestamp >= (toUnixTimestamp(now()) * 1000 - 300000) GROUP BY log_level`,
 		},
 		{
 			name:    "sum by custom attribute",
 			logql:   `sum by (environment) (count_over_time({job="varlogs"}[5m]))`,
-			wantSQL: `SELECT environment, COUNT(*) FROM otel_logs WHERE tenant_id = 0 AND job = 'varlogs' AND "timestamp" >= (now() - 300000) GROUP BY environment`,
+			wantSQL: `SELECT environment, COUNT(*) FROM otel_logs WHERE tenant_id = 0 AND job = 'varlogs' AND timestamp >= (toUnixTimestamp(now()) * 1000 - 300000) GROUP BY environment`,
 		},
 		{
 			name:    "avg by multiple labels",
 			logql:   `avg by (level, service) (count_over_time({job="varlogs"}[5m]))`,
-			wantSQL: `SELECT log_level, service_name, COUNT(*) FROM otel_logs WHERE tenant_id = 0 AND job = 'varlogs' AND "timestamp" >= (now() - 300000) GROUP BY log_level, service_name`,
+			wantSQL: `SELECT log_level, service_name, COUNT(*) FROM otel_logs WHERE tenant_id = 0 AND job = 'varlogs' AND timestamp >= (toUnixTimestamp(now()) * 1000 - 300000) GROUP BY log_level, service_name`,
 		},
 		{
 			name:    "count aggregation",
 			logql:   `count by (level) (count_over_time({job="varlogs"}[5m]))`,
-			wantSQL: `SELECT log_level, COUNT(*) FROM otel_logs WHERE tenant_id = 0 AND job = 'varlogs' AND "timestamp" >= (now() - 300000) GROUP BY log_level`,
+			wantSQL: `SELECT log_level, COUNT(*) FROM otel_logs WHERE tenant_id = 0 AND job = 'varlogs' AND timestamp >= (toUnixTimestamp(now()) * 1000 - 300000) GROUP BY log_level`,
 		},
 		{
 			name:    "min aggregation",
 			logql:   `min by (service) (count_over_time({job="varlogs"}[5m]))`,
-			wantSQL: `SELECT service_name, COUNT(*) FROM otel_logs WHERE tenant_id = 0 AND job = 'varlogs' AND "timestamp" >= (now() - 300000) GROUP BY service_name`,
+			wantSQL: `SELECT service_name, COUNT(*) FROM otel_logs WHERE tenant_id = 0 AND job = 'varlogs' AND timestamp >= (toUnixTimestamp(now()) * 1000 - 300000) GROUP BY service_name`,
 		},
 		{
 			name:    "max aggregation",
 			logql:   `max by (level) (count_over_time({job="varlogs"}[5m]))`,
-			wantSQL: `SELECT log_level, COUNT(*) FROM otel_logs WHERE tenant_id = 0 AND job = 'varlogs' AND "timestamp" >= (now() - 300000) GROUP BY log_level`,
+			wantSQL: `SELECT log_level, COUNT(*) FROM otel_logs WHERE tenant_id = 0 AND job = 'varlogs' AND timestamp >= (toUnixTimestamp(now()) * 1000 - 300000) GROUP BY log_level`,
 		},
 		{
 			name:    "sum by with bytes_over_time",
 			logql:   `sum by (level) (bytes_over_time({job="varlogs"}[5m]))`,
-			wantSQL: `SELECT log_level, SUM(LENGTH(body)) FROM otel_logs WHERE tenant_id = 0 AND job = 'varlogs' AND "timestamp" >= (now() - 300000) GROUP BY log_level`,
+			wantSQL: `SELECT log_level, SUM(LENGTH(body)) FROM otel_logs WHERE tenant_id = 0 AND job = 'varlogs' AND timestamp >= (toUnixTimestamp(now()) * 1000 - 300000) GROUP BY log_level`,
 		},
 		{
 			name:    "unsupported metric function",
@@ -461,7 +461,7 @@ func TestTranslateQuery_WithDrop(t *testing.T) {
 		{
 			name:    "count_over_time with drop",
 			logql:   `count_over_time({host_name="snert"} |= "replicator" | drop __error__[1m])`,
-			wantSQL: `SELECT COUNT(*) FROM otel_logs WHERE tenant_id = 0 AND host_name = 'snert' AND body LIKE '%replicator%' AND "timestamp" >= (now() - 60000)`,
+			wantSQL: `SELECT COUNT(*) FROM otel_logs WHERE tenant_id = 0 AND host_name = 'snert' AND body LIKE '%replicator%' AND timestamp >= (toUnixTimestamp(now()) * 1000 - 60000)`,
 		},
 	}
 

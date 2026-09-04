@@ -11,7 +11,7 @@ import (
 	"github.com/prometheus/prometheus/promql/parser"
 )
 
-// Translator translates PromQL queries to Pinot SQL
+// Translator translates PromQL queries to Clickhouse SQL
 type Translator struct {
 	tenantID    int
 	start       *time.Time        // Optional start time for range queries
@@ -25,7 +25,7 @@ func NewTranslator(tenantID int) *Translator {
 	return &Translator{tenantID: tenantID}
 }
 
-// TranslateQuery parses PromQL and translates to Pinot SQL
+// TranslateQuery parses PromQL and translates to Clickhouse SQL
 func (t *Translator) TranslateQuery(promql string) ([]string, error) {
 	// Normalize metric names (dots → underscores) before parsing
 	// This allows OTel metric names like "jvm.memory.used" to be parsed as valid PromQL
@@ -48,7 +48,7 @@ func (t *Translator) TranslateQuery(promql string) ([]string, error) {
 	return []string{sql}, nil
 }
 
-// TranslateQueryWithTimeRange parses PromQL and translates to Pinot SQL with time range filter
+// TranslateQueryWithTimeRange parses PromQL and translates to Clickhouse SQL with time range filter
 func (t *Translator) TranslateQueryWithTimeRange(promql string, start, end *time.Time, step *time.Duration) ([]string, error) {
 	// Store time range and step in translator
 	t.start = start
@@ -135,14 +135,13 @@ func (t *Translator) translateVectorSelector(vs *parser.VectorSelector) (string,
 			if nativeColumn != "" {
 				labelColumns = append(labelColumns, nativeColumn)
 			} else {
-				labelColumns = append(labelColumns, fmt.Sprintf("JSON_EXTRACT_SCALAR(attributes, %s, 'STRING')", sqlutil.JSONObjectKeyPathLiteral(matcher.Name)))
+				labelColumns = append(labelColumns, fmt.Sprintf("JSONExtractString(attributes, %s)", sqlutil.StringLiteral(matcher.Name)))
 			}
 		}
 
 		// SELECT with bucketed timestamp + labels + aggregated value
-		// Note 1: Use "ts" instead of "timestamp" as alias because timestamp is a reserved keyword in Pinot
-		// Note 2: Use FLOOR() for proper integer division (Pinot does float division otherwise)
-		selectClause = fmt.Sprintf("FLOOR(\"timestamp\" / %d) * %d AS ts", stepMillis, stepMillis)
+		// Use "ts" instead of "timestamp" as alias for the bucketed column
+		selectClause = fmt.Sprintf("intDiv(timestamp, %d) * %d AS ts", stepMillis, stepMillis)
 		if metricName != "" {
 			selectClause += ", metric_name"
 		}
@@ -152,8 +151,7 @@ func (t *Translator) translateVectorSelector(vs *parser.VectorSelector) (string,
 		selectClause += ", AVG(value) AS value" // Use AVG for bucketing
 
 		// GROUP BY bucketed timestamp + labels
-		// Note: Must use FLOOR() to match SELECT clause
-		groupByClause = " GROUP BY FLOOR(\"timestamp\" / " + fmt.Sprintf("%d", stepMillis) + ")"
+		groupByClause = " GROUP BY intDiv(timestamp, " + fmt.Sprintf("%d", stepMillis) + ")"
 		if metricName != "" {
 			groupByClause += ", metric_name"
 		}
@@ -163,7 +161,6 @@ func (t *Translator) translateVectorSelector(vs *parser.VectorSelector) (string,
 		groupByClause += " ORDER BY ts" // Order by the alias
 
 		// Calculate LIMIT based on time range and step
-		// Pinot has a default LIMIT of 10 for GROUP BY, so we must specify explicitly
 		if t.start != nil && t.end != nil {
 			rangeDuration := t.end.Sub(*t.start)
 			maxBuckets := int(rangeDuration.Milliseconds()/stepMillis) + 1
@@ -199,7 +196,7 @@ func (t *Translator) translateVectorSelector(vs *parser.VectorSelector) (string,
 	if t.start != nil && t.end != nil {
 		startMillis := t.start.UnixMilli()
 		endMillis := t.end.UnixMilli()
-		sql += fmt.Sprintf(" AND \"timestamp\" >= %d AND \"timestamp\" <= %d", startMillis, endMillis)
+		sql += fmt.Sprintf(" AND timestamp >= %d AND timestamp <= %d", startMillis, endMillis)
 	}
 
 	// Add GROUP BY if bucketing
@@ -239,11 +236,11 @@ func (t *Translator) translateMatrixSelector(ms *parser.MatrixSelector) (string,
 		// Use explicit time range
 		startMillis := t.start.UnixMilli()
 		endMillis := t.end.UnixMilli()
-		sql += fmt.Sprintf(" AND \"timestamp\" >= %d AND \"timestamp\" <= %d", startMillis, endMillis)
+		sql += fmt.Sprintf(" AND timestamp >= %d AND timestamp <= %d", startMillis, endMillis)
 	} else {
 		// Use relative time range (lookback from now)
 		rangeMillis := ms.Range.Milliseconds()
-		sql += fmt.Sprintf(" AND \"timestamp\" >= (now() - %d)", rangeMillis)
+		sql += fmt.Sprintf(" AND timestamp >= (toUnixTimestamp(now()) * 1000 - %d)", rangeMillis)
 	}
 
 	return sql, nil
@@ -262,7 +259,7 @@ func (t *Translator) translateLabelMatcher(matcher *labels.Matcher) (string, err
 		fieldRef = nativeColumn
 	} else {
 		// Use JSON extraction for attributes
-		fieldRef = fmt.Sprintf("JSON_EXTRACT_SCALAR(attributes, %s, 'STRING')", sqlutil.JSONObjectKeyPathLiteral(labelName))
+		fieldRef = fmt.Sprintf("JSONExtractString(attributes, %s)", sqlutil.StringLiteral(labelName))
 	}
 
 	switch matcher.Type {
@@ -271,10 +268,9 @@ func (t *Translator) translateLabelMatcher(matcher *labels.Matcher) (string, err
 	case labels.MatchNotEqual:
 		return fmt.Sprintf("%s <> %s", fieldRef, sqlutil.StringLiteral(labelValue)), nil
 	case labels.MatchRegexp:
-		// Pinot uses REGEXP_LIKE for regex matching
-		return fmt.Sprintf("REGEXP_LIKE(%s, %s)", fieldRef, sqlutil.StringLiteral(labelValue)), nil
+		return fmt.Sprintf("match(%s, %s)", fieldRef, sqlutil.StringLiteral(labelValue)), nil
 	case labels.MatchNotRegexp:
-		return fmt.Sprintf("NOT REGEXP_LIKE(%s, %s)", fieldRef, sqlutil.StringLiteral(labelValue)), nil
+		return fmt.Sprintf("NOT match(%s, %s)", fieldRef, sqlutil.StringLiteral(labelValue)), nil
 	default:
 		return "", fmt.Errorf("unsupported matcher type: %s", matcher.Type)
 	}
@@ -325,7 +321,7 @@ func (t *Translator) translateAggregate(ae *parser.AggregateExpr) (string, error
 	if hasTimeBucketing {
 		// If inner query has time bucketing, we need to wrap it in a subquery
 		// and aggregate over the bucketed results
-		// Note: Inner query uses "ts" as timestamp alias (not "timestamp" which is reserved)
+		// Note: Inner query uses "ts" as timestamp alias (bucketed column)
 		if len(ae.Grouping) > 0 {
 			// sum by (label1, label2) with time bucketing
 			groupFields := make([]string, 0, len(ae.Grouping))
@@ -361,7 +357,7 @@ func (t *Translator) translateAggregate(ae *parser.AggregateExpr) (string, error
 			if nativeColumn != "" {
 				groupFields = append(groupFields, nativeColumn)
 			} else {
-				groupFields = append(groupFields, fmt.Sprintf("JSON_EXTRACT_SCALAR(attributes, %s, 'STRING')", sqlutil.JSONObjectKeyPathLiteral(label)))
+				groupFields = append(groupFields, fmt.Sprintf("JSONExtractString(attributes, %s)", sqlutil.StringLiteral(label)))
 			}
 		}
 		selectClause = strings.Join(groupFields, ", ") + ", " + aggFunc
@@ -413,8 +409,6 @@ func (t *Translator) translateBinary(be *parser.BinaryExpr) (string, error) {
 
 		// Return a SQL query that produces this scalar value
 		// This is used for Grafana connection tests (e.g., "1+1")
-		// Pinot requires a FROM clause, so we use a dummy table or LIMIT 1
-		// We'll use a simple query that returns the scalar without hitting any table
 		return fmt.Sprintf("SELECT %f AS value FROM otel_metrics LIMIT 1", result), nil
 	}
 
@@ -545,7 +539,7 @@ func (t *Translator) translateMetricName(normalizedName string) string {
 	return strings.ReplaceAll(normalizedName, "_", ".")
 }
 
-// getNativeColumn maps label names to native Pinot columns
+// getNativeColumn maps label names to native Clickhouse columns
 // Reuses the same mappings as OQL translator
 func getNativeColumn(labelName string) string {
 	// Map of common Prometheus labels to OTel semantic conventions / native columns

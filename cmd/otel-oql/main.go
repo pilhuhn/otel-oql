@@ -12,10 +12,10 @@ import (
 	"github.com/pilhuhn/otel-oql/internal/config"
 	"github.com/pilhuhn/otel-oql/pkg/api"
 	"github.com/pilhuhn/otel-oql/pkg/auth"
+	"github.com/pilhuhn/otel-oql/pkg/clickhouse"
 	"github.com/pilhuhn/otel-oql/pkg/ingestion"
 	"github.com/pilhuhn/otel-oql/pkg/mcp"
 	"github.com/pilhuhn/otel-oql/pkg/observability"
-	"github.com/pilhuhn/otel-oql/pkg/pinot"
 	"github.com/pilhuhn/otel-oql/pkg/receiver"
 	"github.com/pilhuhn/otel-oql/pkg/tenant"
 	"github.com/pilhuhn/otel-oql/pkg/userstore"
@@ -107,8 +107,7 @@ func initAuth(cfg *config.Config) (*auth.Middleware, error) {
 
 func runAllMode(ctx context.Context, cfg *config.Config) error {
 	fmt.Printf("Starting OTEL-OQL service (all-in-one mode)...\n")
-	fmt.Printf("Pinot URL: %s\n", cfg.PinotURL)
-	fmt.Printf("Kafka Brokers: %s\n", cfg.KafkaBrokers)
+	fmt.Printf("Clickhouse URL: %s\n", cfg.ClickhouseURL)
 	fmt.Printf("OTLP gRPC Port: %d\n", cfg.OTLPGRPCPort)
 	fmt.Printf("OTLP HTTP Port: %d\n", cfg.OTLPHTTPPort)
 	fmt.Printf("Query API Port: %d\n", cfg.QueryAPIPort)
@@ -146,8 +145,8 @@ func runAllMode(ctx context.Context, cfg *config.Config) error {
 	}
 	defer obs.Shutdown(ctx)
 
-	// Initialize Pinot client (for queries)
-	pinotClient := pinot.NewClient(cfg.PinotURL)
+	// Initialize Clickhouse client
+	chClient := clickhouse.NewClient(cfg.ClickhouseURL)
 
 	// Determine which middleware to use
 	var httpMiddleware func(http.Handler) http.Handler
@@ -164,8 +163,8 @@ func runAllMode(ctx context.Context, cfg *config.Config) error {
 		grpcUnaryInterceptor = validator.GRPCUnaryInterceptor()
 	}
 
-	// Initialize ingester (with Kafka)
-	ingester, err := ingestion.NewIngester(cfg.KafkaBrokers, obs, cfg.DebugIngestion)
+	// Initialize ingester (direct Clickhouse writes)
+	ingester, err := ingestion.NewIngester(cfg.ClickhouseURL, obs, cfg.DebugIngestion)
 	if err != nil {
 		return fmt.Errorf("failed to create ingester: %w", err)
 	}
@@ -176,10 +175,10 @@ func runAllMode(ctx context.Context, cfg *config.Config) error {
 	httpReceiver := receiver.NewHTTPReceiver(cfg.OTLPHTTPPort, httpMiddleware, ingester, obs, cfg.DebugIngestion)
 
 	// Initialize query API server with auth/tenant middleware
-	queryServer := api.NewServer(cfg.QueryAPIPort, httpMiddleware, pinotClient, obs, cfg.DebugQuery, cfg.DebugTranslation)
+	queryServer := api.NewServer(cfg.QueryAPIPort, httpMiddleware, chClient, obs, cfg.DebugQuery, cfg.DebugTranslation)
 
 	// Initialize MCP server
-	mcpServer := mcp.NewServer(cfg.MCPPort, pinotClient)
+	mcpServer := mcp.NewServer(cfg.MCPPort, chClient)
 
 	// Start receivers
 	if err := grpcReceiver.Start(ctx); err != nil {
@@ -235,7 +234,7 @@ func runAllMode(ctx context.Context, cfg *config.Config) error {
 
 func runIngestionMode(ctx context.Context, cfg *config.Config) error {
 	fmt.Printf("Starting OTEL-OQL service (ingestion mode)...\n")
-	fmt.Printf("Kafka Brokers: %s\n", cfg.KafkaBrokers)
+	fmt.Printf("Clickhouse URL: %s\n", cfg.ClickhouseURL)
 	fmt.Printf("OTLP gRPC Port: %d\n", cfg.OTLPGRPCPort)
 	fmt.Printf("OTLP HTTP Port: %d\n", cfg.OTLPHTTPPort)
 	fmt.Printf("Test Mode: %v\n", cfg.TestMode)
@@ -284,8 +283,8 @@ func runIngestionMode(ctx context.Context, cfg *config.Config) error {
 		grpcUnaryInterceptor = validator.GRPCUnaryInterceptor()
 	}
 
-	// Initialize ingester (with Kafka)
-	ingester, err := ingestion.NewIngester(cfg.KafkaBrokers, obs, cfg.DebugIngestion)
+	// Initialize ingester (direct Clickhouse writes)
+	ingester, err := ingestion.NewIngester(cfg.ClickhouseURL, obs, cfg.DebugIngestion)
 	if err != nil {
 		return fmt.Errorf("failed to create ingester: %w", err)
 	}
@@ -323,7 +322,6 @@ func runIngestionMode(ctx context.Context, cfg *config.Config) error {
 		fmt.Printf("Error stopping HTTP receiver: %v\n", err)
 	}
 
-	// Close Kafka connections
 	ingester.Close()
 
 	fmt.Println("Shutdown complete")
@@ -332,7 +330,7 @@ func runIngestionMode(ctx context.Context, cfg *config.Config) error {
 
 func runQueryMode(ctx context.Context, cfg *config.Config) error {
 	fmt.Printf("Starting OTEL-OQL service (query mode)...\n")
-	fmt.Printf("Pinot URL: %s\n", cfg.PinotURL)
+	fmt.Printf("Clickhouse URL: %s\n", cfg.ClickhouseURL)
 	fmt.Printf("Query API Port: %d\n", cfg.QueryAPIPort)
 	fmt.Printf("MCP Port: %d\n", cfg.MCPPort)
 	fmt.Printf("Test Mode: %v\n", cfg.TestMode)
@@ -368,8 +366,8 @@ func runQueryMode(ctx context.Context, cfg *config.Config) error {
 	}
 	defer obs.Shutdown(ctx)
 
-	// Initialize Pinot client (for queries)
-	pinotClient := pinot.NewClient(cfg.PinotURL)
+	// Initialize Clickhouse client
+	chClient := clickhouse.NewClient(cfg.ClickhouseURL)
 
 	// Determine which middleware to use
 	var httpMiddleware func(http.Handler) http.Handler
@@ -382,10 +380,10 @@ func runQueryMode(ctx context.Context, cfg *config.Config) error {
 	}
 
 	// Initialize query API server with auth/tenant middleware
-	queryServer := api.NewServer(cfg.QueryAPIPort, httpMiddleware, pinotClient, obs, cfg.DebugQuery, cfg.DebugTranslation)
+	queryServer := api.NewServer(cfg.QueryAPIPort, httpMiddleware, chClient, obs, cfg.DebugQuery, cfg.DebugTranslation)
 
 	// Initialize MCP server
-	mcpServer := mcp.NewServer(cfg.MCPPort, pinotClient)
+	mcpServer := mcp.NewServer(cfg.MCPPort, chClient)
 
 	// Start query API server
 	if err := queryServer.Start(ctx); err != nil {

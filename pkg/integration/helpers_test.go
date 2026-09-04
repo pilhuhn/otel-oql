@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pilhuhn/otel-oql/pkg/pinot"
+	"github.com/pilhuhn/otel-oql/pkg/clickhouse"
 	"go.opentelemetry.io/collector/pdata/pcommon"
 	"go.opentelemetry.io/collector/pdata/plog"
 	"go.opentelemetry.io/collector/pdata/pmetric"
@@ -19,20 +19,19 @@ import (
 )
 
 const (
-	pinotBrokerURL     = "http://localhost:8000" // Broker for queries
-	pinotControllerURL = "http://localhost:9000" // Controller for schema/table management
-	otlpGRPCAddr       = "localhost:4317"
-	otlpHTTPURL        = "http://localhost:4318"
-	queryAPIURL        = "http://localhost:8080"
-	testTenantID       = 0
+	clickhouseURL  = "http://localhost:8123" // Clickhouse HTTP API
+	otlpGRPCAddr   = "localhost:4317"
+	otlpHTTPURL    = "http://localhost:4318"
+	queryAPIURL    = "http://localhost:8080"
+	testTenantID   = 0
 )
 
-// IsPinotRunning checks if Pinot is running and healthy
-func IsPinotRunning(t *testing.T) bool {
+// IsClickhouseRunning checks if Clickhouse is running and healthy
+func IsClickhouseRunning(t *testing.T) bool {
 	t.Helper()
 
 	client := &http.Client{Timeout: 2 * time.Second}
-	resp, err := client.Get(pinotBrokerURL + "/health")
+	resp, err := client.Get(clickhouseURL + "/ping")
 	if err != nil {
 		return false
 	}
@@ -41,11 +40,11 @@ func IsPinotRunning(t *testing.T) bool {
 	return resp.StatusCode == http.StatusOK
 }
 
-// CleanupTestData deletes test data from Pinot tables
+// CleanupTestData deletes test data from Clickhouse tables
 func CleanupTestData(t *testing.T, tenantID int) {
 	t.Helper()
 
-	client := pinot.NewClient(pinotBrokerURL)
+	client := clickhouse.NewClient(clickhouseURL)
 	ctx := context.Background()
 
 	tables := []string{"otel_spans", "otel_metrics", "otel_logs"}
@@ -57,11 +56,11 @@ func CleanupTestData(t *testing.T, tenantID int) {
 	}
 }
 
-// QueryPinot executes a SQL query against Pinot
-func QueryPinot(t *testing.T, sql string) ([]map[string]interface{}, error) {
+// QueryClickhouse executes a SQL query against Clickhouse
+func QueryClickhouse(t *testing.T, sql string) ([]map[string]interface{}, error) {
 	t.Helper()
 
-	client := pinot.NewClient(pinotBrokerURL)
+	client := clickhouse.NewClient(clickhouseURL)
 	ctx := context.Background()
 
 	resp, err := client.Query(ctx, sql)
@@ -401,15 +400,15 @@ func SendLogsHTTP(t *testing.T, logs plog.Logs, tenantID int) error {
 	return nil
 }
 
-// WaitForPinot waits for Pinot to be ready
-func WaitForPinot(t *testing.T, timeout time.Duration) error {
+// WaitForClickhouse waits for Clickhouse to be ready
+func WaitForClickhouse(t *testing.T, timeout time.Duration) error {
 	t.Helper()
 
 	deadline := time.Now().Add(timeout)
 	client := &http.Client{Timeout: 1 * time.Second}
 
 	for time.Now().Before(deadline) {
-		resp, err := client.Get(pinotBrokerURL + "/health")
+		resp, err := client.Get(clickhouseURL + "/ping")
 		if err == nil && resp.StatusCode == http.StatusOK {
 			resp.Body.Close()
 			return nil
@@ -420,7 +419,7 @@ func WaitForPinot(t *testing.T, timeout time.Duration) error {
 		time.Sleep(1 * time.Second)
 	}
 
-	return fmt.Errorf("pinot not ready after %v", timeout)
+	return fmt.Errorf("clickhouse not ready after %v", timeout)
 }
 
 // WaitForOtelOQL waits for the OTEL-OQL service to be ready

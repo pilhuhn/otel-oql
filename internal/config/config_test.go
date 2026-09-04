@@ -7,86 +7,69 @@ import (
 
 func TestModeConfiguration(t *testing.T) {
 	tests := []struct {
-		name         string
-		mode         string
-		pinotURL     string
-		kafkaBrokers string
-		wantErr      bool
-		errContains  string
+		name          string
+		mode          string
+		clickhouseURL string
+		wantErr       bool
+		errContains   string
 	}{
 		{
-			name:         "all mode - requires both Pinot and Kafka",
-			mode:         "all",
-			pinotURL:     "http://localhost:9000",
-			kafkaBrokers: "localhost:9092",
-			wantErr:      false,
+			name:          "all mode - requires Clickhouse",
+			mode:          "all",
+			clickhouseURL: "http://localhost:8123",
+			wantErr:       false,
 		},
 		{
-			name:         "all mode - missing Pinot",
-			mode:         "all",
-			pinotURL:     "",
-			kafkaBrokers: "localhost:9092",
-			wantErr:      true,
-			errContains:  "pinot-url is required",
+			name:          "all mode - missing Clickhouse",
+			mode:          "all",
+			clickhouseURL: "",
+			wantErr:       true,
+			errContains:   "clickhouse-url is required",
 		},
 		{
-			name:         "all mode - missing Kafka",
-			mode:         "all",
-			pinotURL:     "http://localhost:9000",
-			kafkaBrokers: "",
-			wantErr:      true,
-			errContains:  "kafka-brokers is required",
+			name:          "ingestion mode - requires Clickhouse",
+			mode:          "ingestion",
+			clickhouseURL: "http://localhost:8123",
+			wantErr:       false,
 		},
 		{
-			name:         "ingestion mode - requires only Kafka",
-			mode:         "ingestion",
-			pinotURL:     "",
-			kafkaBrokers: "localhost:9092",
-			wantErr:      false,
+			name:          "ingestion mode - missing Clickhouse",
+			mode:          "ingestion",
+			clickhouseURL: "",
+			wantErr:       true,
+			errContains:   "clickhouse-url is required",
 		},
 		{
-			name:         "ingestion mode - missing Kafka",
-			mode:         "ingestion",
-			pinotURL:     "",
-			kafkaBrokers: "",
-			wantErr:      true,
-			errContains:  "kafka-brokers is required",
+			name:          "query mode - requires Clickhouse",
+			mode:          "query",
+			clickhouseURL: "http://localhost:8123",
+			wantErr:       false,
 		},
 		{
-			name:         "query mode - requires only Pinot",
-			mode:         "query",
-			pinotURL:     "http://localhost:9000",
-			kafkaBrokers: "",
-			wantErr:      false,
+			name:          "query mode - missing Clickhouse",
+			mode:          "query",
+			clickhouseURL: "",
+			wantErr:       true,
+			errContains:   "clickhouse-url is required",
 		},
 		{
-			name:         "query mode - missing Pinot",
-			mode:         "query",
-			pinotURL:     "",
-			kafkaBrokers: "",
-			wantErr:      true,
-			errContains:  "pinot-url is required",
-		},
-		{
-			name:         "invalid mode",
-			mode:         "invalid",
-			pinotURL:     "http://localhost:9000",
-			kafkaBrokers: "localhost:9092",
-			wantErr:      true,
-			errContains:  "invalid mode",
+			name:          "invalid mode",
+			mode:          "invalid",
+			clickhouseURL: "http://localhost:8123",
+			wantErr:       true,
+			errContains:   "invalid mode",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			cfg := &Config{
-				Mode:         tt.mode,
-				PinotURL:     tt.pinotURL,
-				KafkaBrokers: tt.kafkaBrokers,
-				OTLPGRPCPort: 4317,
-				OTLPHTTPPort: 4318,
-				QueryAPIPort: 8080,
-				MCPPort:      8090,
+				Mode:          tt.mode,
+				ClickhouseURL: tt.clickhouseURL,
+				OTLPGRPCPort:  4317,
+				OTLPHTTPPort:  4318,
+				QueryAPIPort:  8080,
+				MCPPort:       8090,
 			}
 
 			err := cfg.validate()
@@ -109,16 +92,13 @@ func TestModeConfiguration(t *testing.T) {
 }
 
 func TestModeDefault(t *testing.T) {
-	// Save and restore env vars
 	oldMode := os.Getenv("OTEL_OQL_MODE")
 	defer os.Setenv("OTEL_OQL_MODE", oldMode)
 
-	// Clear env var
 	os.Unsetenv("OTEL_OQL_MODE")
 
 	cfg := &Config{}
 
-	// Simulate default assignment
 	if cfg.Mode == "" {
 		cfg.Mode = "all"
 	}
@@ -129,7 +109,6 @@ func TestModeDefault(t *testing.T) {
 }
 
 func TestModeEnvironmentVariable(t *testing.T) {
-	// Save and restore env vars
 	oldMode := os.Getenv("OTEL_OQL_MODE")
 	defer os.Setenv("OTEL_OQL_MODE", oldMode)
 
@@ -149,7 +128,6 @@ func TestModeEnvironmentVariable(t *testing.T) {
 
 			cfg := &Config{}
 
-			// Simulate env var loading
 			if env := os.Getenv("OTEL_OQL_MODE"); env != "" {
 				cfg.Mode = env
 			}
@@ -177,8 +155,8 @@ func TestPortValidationByMode(t *testing.T) {
 			mode:         "ingestion",
 			otlpGRPCPort: 4317,
 			otlpHTTPPort: 4318,
-			queryAPIPort: 0, // Not required
-			mcpPort:      0, // Not required
+			queryAPIPort: 0,
+			mcpPort:      0,
 			wantErr:      false,
 		},
 		{
@@ -194,8 +172,8 @@ func TestPortValidationByMode(t *testing.T) {
 		{
 			name:         "query mode - requires query ports",
 			mode:         "query",
-			otlpGRPCPort: 0, // Not required
-			otlpHTTPPort: 0, // Not required
+			otlpGRPCPort: 0,
+			otlpHTTPPort: 0,
 			queryAPIPort: 8080,
 			mcpPort:      8090,
 			wantErr:      false,
@@ -224,13 +202,12 @@ func TestPortValidationByMode(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			cfg := &Config{
-				Mode:         tt.mode,
-				PinotURL:     "http://localhost:9000",
-				KafkaBrokers: "localhost:9092",
-				OTLPGRPCPort: tt.otlpGRPCPort,
-				OTLPHTTPPort: tt.otlpHTTPPort,
-				QueryAPIPort: tt.queryAPIPort,
-				MCPPort:      tt.mcpPort,
+				Mode:          tt.mode,
+				ClickhouseURL: "http://localhost:8123",
+				OTLPGRPCPort:  tt.otlpGRPCPort,
+				OTLPHTTPPort:  tt.otlpHTTPPort,
+				QueryAPIPort:  tt.queryAPIPort,
+				MCPPort:       tt.mcpPort,
 			}
 
 			err := cfg.validate()
@@ -252,7 +229,6 @@ func TestPortValidationByMode(t *testing.T) {
 	}
 }
 
-// Helper function to check if a string contains a substring
 func contains(s, substr string) bool {
 	return len(s) >= len(substr) && (s == substr || len(substr) == 0 ||
 		(len(s) > 0 && len(substr) > 0 && findSubstring(s, substr)))

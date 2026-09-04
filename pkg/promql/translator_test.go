@@ -30,7 +30,7 @@ func TestVectorSelector(t *testing.T) {
 		{
 			name:    "OTel metric with labels",
 			promql:  `jvm.memory.used{job="myapp",area="heap"}`,
-			wantSQL: "SELECT * FROM otel_metrics WHERE tenant_id = 0 AND metric_name = 'jvm.memory.used' AND job = 'myapp' AND JSON_EXTRACT_SCALAR(attributes, '$.area', 'STRING') = 'heap'",
+			wantSQL: "SELECT * FROM otel_metrics WHERE tenant_id = 0 AND metric_name = 'jvm.memory.used' AND job = 'myapp' AND JSONExtractString(attributes, 'area') = 'heap'",
 			wantErr: false,
 		},
 		{
@@ -60,13 +60,13 @@ func TestVectorSelector(t *testing.T) {
 		{
 			name:    "metric with regex matcher (PromQL style)",
 			promql:  `http_requests_total{job=~"api.*"}`,
-			wantSQL: "SELECT * FROM otel_metrics WHERE tenant_id = 0 AND metric_name = 'http.requests.total' AND REGEXP_LIKE(job, 'api.*')",
+			wantSQL: "SELECT * FROM otel_metrics WHERE tenant_id = 0 AND metric_name = 'http.requests.total' AND match(job, 'api.*')",
 			wantErr: false,
 		},
 		{
 			name:    "metric with negative regex matcher (PromQL style)",
 			promql:  `http_requests_total{job!~"test.*"}`,
-			wantSQL: "SELECT * FROM otel_metrics WHERE tenant_id = 0 AND metric_name = 'http.requests.total' AND NOT REGEXP_LIKE(job, 'test.*')",
+			wantSQL: "SELECT * FROM otel_metrics WHERE tenant_id = 0 AND metric_name = 'http.requests.total' AND NOT match(job, 'test.*')",
 			wantErr: false,
 		},
 	}
@@ -113,7 +113,7 @@ func TestMatrixSelector(t *testing.T) {
 				"SELECT * FROM otel_metrics",
 				"tenant_id = 0",
 				"metric_name = 'http.requests.total'",
-				"\"timestamp\" >= (now() - 300000)", // 5 minutes in ms
+				"timestamp >= (toUnixTimestamp(now()) * 1000 - 300000)", // 5 minutes in ms
 			},
 			wantErr: false,
 		},
@@ -123,7 +123,7 @@ func TestMatrixSelector(t *testing.T) {
 			wantContains: []string{
 				"metric_name = 'cpu.usage'",
 				"job = 'api'",
-				"\"timestamp\" >= (now() - 3600000)", // 1 hour in ms
+				"timestamp >= (toUnixTimestamp(now()) * 1000 - 3600000)", // 1 hour in ms
 			},
 			wantErr: false,
 		},
@@ -364,7 +364,7 @@ func TestRateFunction(t *testing.T) {
 			wantContains: []string{
 				"SELECT (MAX(value) - MIN(value))",
 				"metric_name = 'http.requests.total'", // Translated from underscores to dots
-				"\"timestamp\" >= (now() - 300000)",
+				"timestamp >= (toUnixTimestamp(now()) * 1000 - 300000)",
 			},
 			wantErr: false,
 		},
@@ -374,7 +374,7 @@ func TestRateFunction(t *testing.T) {
 			wantContains: []string{
 				"SELECT (MAX(value) - MIN(value))",
 				"metric_name = 'cpu.usage'", // Translated from underscores to dots
-				"\"timestamp\" >= (now() - 60000)",
+				"timestamp >= (toUnixTimestamp(now()) * 1000 - 60000)",
 			},
 			wantErr: false,
 		},
@@ -556,9 +556,9 @@ func TestTimeBucketing(t *testing.T) {
 			query:       "http_requests_total",
 			stepSeconds: 15,
 			wantContains: []string{
-				"FLOOR(\"timestamp\" / 15000) * 15000 AS ts", // 15s = 15000ms, use FLOOR for integer division
+				"intDiv(timestamp, 15000) * 15000 AS ts", // 15s = 15000ms, use FLOOR for integer division
 				"AVG(value) AS value",
-				"GROUP BY FLOOR",
+				"GROUP BY intDiv",
 				"ORDER BY ts",
 				"LIMIT", // Pinot default GROUP BY limit is 10, we need explicit LIMIT
 			},
@@ -568,10 +568,10 @@ func TestTimeBucketing(t *testing.T) {
 			query:       "http_requests_total{job=\"api\"}",
 			stepSeconds: 60,
 			wantContains: []string{
-				"FLOOR(\"timestamp\" / 60000) * 60000 AS ts", // 1m = 60000ms, use FLOOR for integer division
+				"intDiv(timestamp, 60000) * 60000 AS ts", // 1m = 60000ms, use FLOOR for integer division
 				"job",
 				"AVG(value) AS value",
-				"GROUP BY FLOOR",
+				"GROUP BY intDiv",
 				"LIMIT",
 			},
 		},
@@ -580,7 +580,7 @@ func TestTimeBucketing(t *testing.T) {
 			query:       "sum by (service_name) (http_requests_total)",
 			stepSeconds: 30,
 			wantContains: []string{
-				"FLOOR(\"timestamp\" / 30000) * 30000", // 30s = 30000ms, use FLOOR
+				"intDiv(timestamp, 30000) * 30000", // 30s = 30000ms, use FLOOR
 				"SUM(value)",
 				"bucketed_data", // Subquery wrapper
 				"LIMIT",

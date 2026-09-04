@@ -5,48 +5,34 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/IBM/sarama"
+	"github.com/pilhuhn/otel-oql/pkg/clickhouse"
 	"github.com/pilhuhn/otel-oql/pkg/observability"
 	"go.opentelemetry.io/collector/pdata/plog"
 	"go.opentelemetry.io/collector/pdata/pmetric"
 	"go.opentelemetry.io/collector/pdata/ptrace"
 )
 
-// Ingester handles data ingestion to Kafka
+// Ingester handles direct data ingestion to Clickhouse
 type Ingester struct {
-	producer       sarama.SyncProducer
+	client         *clickhouse.Client
 	obs            *observability.Observability
 	debugIngestion bool
 }
 
-// NewIngester creates a new ingester with Kafka producer
-func NewIngester(kafkaBrokers string, obs *observability.Observability, debugIngestion bool) (*Ingester, error) {
-	config := sarama.NewConfig()
-	config.Producer.Return.Successes = true
-	config.Producer.RequiredAcks = sarama.WaitForLocal
-	config.Producer.Compression = sarama.CompressionSnappy
-
-	brokers := []string{kafkaBrokers}
-	producer, err := sarama.NewSyncProducer(brokers, config)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create Kafka producer: %w", err)
-	}
-
+// NewIngester creates a new ingester with Clickhouse client
+func NewIngester(clickhouseURL string, obs *observability.Observability, debugIngestion bool) (*Ingester, error) {
+	client := clickhouse.NewClient(clickhouseURL)
 	return &Ingester{
-		producer:       producer,
+		client:         client,
 		obs:            obs,
 		debugIngestion: debugIngestion,
 	}, nil
 }
 
-// Close closes the Kafka producer
-func (i *Ingester) Close() {
-	if i.producer != nil {
-		i.producer.Close()
-	}
-}
+// Close is a no-op (Clickhouse HTTP client has no persistent connection to close)
+func (i *Ingester) Close() {}
 
-// IngestTraces ingests traces into Pinot
+// IngestTraces ingests traces into Clickhouse
 func (i *Ingester) IngestTraces(ctx context.Context, tenantID int, traces ptrace.Traces) error {
 	ctx, span := i.obs.Tracer().Start(ctx, "ingestion.traces")
 	defer span.End()
@@ -64,22 +50,18 @@ func (i *Ingester) IngestTraces(ctx context.Context, tenantID int, traces ptrace
 				span := ss.Spans().At(idx)
 				attrs := span.Attributes().AsRaw()
 
-				// Debug: log all attributes
 				if i.debugIngestion && len(attrs) > 0 {
 					attrsJSON, _ := json.Marshal(attrs)
 					fmt.Printf("[DEBUG INGESTION] Span %s attributes: %s\n", span.Name(), string(attrsJSON))
 				}
 
-				// Determine error status from span status code
 				isError := span.Status().Code() == 2 // 2 = Error in OTLP
 
-				// Extract HTTP status code - try both old and new semantic conventions
 				httpStatusCode := extractInt(attrs, "http.status_code")
 				if httpStatusCode == nil {
 					httpStatusCode = extractInt(attrs, "http.response.status_code")
 				}
 
-				// Extract HTTP method - try both old and new conventions
 				httpMethod := extractString(attrs, "http.method")
 				if httpMethod == nil {
 					httpMethod = extractString(attrs, "http.request.method")
@@ -89,6 +71,11 @@ func (i *Ingester) IngestTraces(ctx context.Context, tenantID int, traces ptrace
 					fmt.Printf("[DEBUG INGESTION] Span %s - error=%v, http_status=%v, http_method=%v\n",
 						span.Name(), isError, httpStatusCode, httpMethod)
 				}
+
+				remainingAttrs := removeKnownKeys(attrs, spanKnownKeys)
+				attrsJSON, _ := json.Marshal(remainingAttrs)
+				remainingResourceAttrs := removeKnownKeys(resourceAttrs, spanResourceKnownKeys)
+				resourceAttrsJSON, _ := json.Marshal(remainingResourceAttrs)
 
 				record := map[string]interface{}{
 					"tenant_id":      tenantID,
@@ -102,23 +89,21 @@ func (i *Ingester) IngestTraces(ctx context.Context, tenantID int, traces ptrace
 					"status_code":    span.Status().Code().String(),
 					"status_message": span.Status().Message(),
 
-					// Extract common semantic convention attributes
-					"service_name":          extractString(resourceAttrs, "service.name"),
-					"http_method":           httpMethod,
-					"http_status_code":      httpStatusCode,
-					"http_route":            extractString(attrs, "http.route"),
-					"http_target":           extractString(attrs, "http.target"),
-					"db_system":             extractString(attrs, "db.system"),
-					"db_statement":          extractString(attrs, "db.statement"),
-					"messaging_system":      extractString(attrs, "messaging.system"),
-					"messaging_destination": extractString(attrs, "messaging.destination"),
-					"rpc_service":           extractString(attrs, "rpc.service"),
-					"rpc_method":            extractString(attrs, "rpc.method"),
+					"service_name":          stringOrEmpty(extractString(resourceAttrs, "service.name")),
+					"http_method":           stringOrEmpty(httpMethod),
+					"http_status_code":      httpStatusCode, // nil → Nullable null
+					"http_route":            stringOrEmpty(extractString(attrs, "http.route")),
+					"http_target":           stringOrEmpty(extractString(attrs, "http.target")),
+					"db_system":             stringOrEmpty(extractString(attrs, "db.system")),
+					"db_statement":          stringOrEmpty(extractString(attrs, "db.statement")),
+					"messaging_system":      stringOrEmpty(extractString(attrs, "messaging.system")),
+					"messaging_destination": stringOrEmpty(extractString(attrs, "messaging.destination")),
+					"rpc_service":           stringOrEmpty(extractString(attrs, "rpc.service")),
+					"rpc_method":            stringOrEmpty(extractString(attrs, "rpc.method")),
 					"error":                 isError,
 
-					// Store remaining attributes as JSON
-					"attributes":          removeKnownKeys(attrs, spanKnownKeys),
-					"resource_attributes": removeKnownKeys(resourceAttrs, spanResourceKnownKeys),
+					"attributes":          string(attrsJSON),
+					"resource_attributes": string(resourceAttrsJSON),
 				}
 
 				records = append(records, record)
@@ -134,52 +119,22 @@ func (i *Ingester) IngestTraces(ctx context.Context, tenantID int, traces ptrace
 	}
 
 	if i.debugIngestion {
-		fmt.Printf("[DEBUG INGESTION] Publishing %d span records to Kafka\n", len(records))
+		fmt.Printf("[DEBUG INGESTION] Inserting %d span records into Clickhouse\n", len(records))
 	}
 
-	// Publish records to Kafka
-	for _, record := range records {
-		payload, err := json.Marshal(record)
-		if err != nil {
-			if i.debugIngestion {
-				fmt.Printf("[DEBUG INGESTION] Failed to marshal span: %v\n", err)
-			}
-			return fmt.Errorf("failed to marshal span record: %w", err)
-		}
-
-		if i.debugIngestion {
-			fmt.Printf("[DEBUG INGESTION] Marshaled span record, %d bytes\n", len(payload))
-		}
-
-		msg := &sarama.ProducerMessage{
-			Topic: "otel-spans",
-			Value: sarama.ByteEncoder(payload),
-		}
-
-		partition, offset, err := i.producer.SendMessage(msg)
-		if err != nil {
-			if i.debugIngestion {
-				fmt.Printf("[DEBUG INGESTION] Failed to send to Kafka: %v\n", err)
-			}
-			return fmt.Errorf("failed to send span to Kafka: %w", err)
-		}
-		if i.debugIngestion {
-			fmt.Printf("[DEBUG INGESTION] Sent to Kafka partition=%d offset=%d\n", partition, offset)
-		}
+	if err := i.client.Insert(ctx, "otel_spans", records); err != nil {
+		return fmt.Errorf("failed to insert spans into Clickhouse: %w", err)
 	}
 
 	if i.debugIngestion {
-		fmt.Printf("[DEBUG INGESTION] Successfully published %d spans to Kafka\n", len(records))
+		fmt.Printf("[DEBUG INGESTION] Successfully inserted %d spans\n", len(records))
 	}
 
-	// Record observability metrics
 	i.obs.RecordIngestion(ctx, "spans", int64(len(records)))
-	i.obs.RecordKafkaPublish(ctx, "otel-spans", int64(len(records)))
-
 	return nil
 }
 
-// IngestMetrics ingests metrics into Pinot
+// IngestMetrics ingests metrics into Clickhouse
 func (i *Ingester) IngestMetrics(ctx context.Context, tenantID int, metrics pmetric.Metrics) error {
 	ctx, span := i.obs.Tracer().Start(ctx, "ingestion.metrics")
 	defer span.End()
@@ -196,7 +151,6 @@ func (i *Ingester) IngestMetrics(ctx context.Context, tenantID int, metrics pmet
 			for idx := 0; idx < sm.Metrics().Len(); idx++ {
 				metric := sm.Metrics().At(idx)
 
-				// Handle different metric types
 				switch metric.Type() {
 				case pmetric.MetricTypeGauge:
 					records = append(records, i.convertGauge(tenantID, metric, resourceAttrs)...)
@@ -217,48 +171,22 @@ func (i *Ingester) IngestMetrics(ctx context.Context, tenantID int, metrics pmet
 	}
 
 	if i.debugIngestion {
-		fmt.Printf("[DEBUG INGESTION] Publishing %d metric records to Kafka\n", len(records))
+		fmt.Printf("[DEBUG INGESTION] Inserting %d metric records into Clickhouse\n", len(records))
 	}
 
-	// Publish records to Kafka
-	for _, record := range records {
-		payload, err := json.Marshal(record)
-		if err != nil {
-			if i.debugIngestion {
-				fmt.Printf("[DEBUG INGESTION] Failed to marshal metric: %v\n", err)
-			}
-			return fmt.Errorf("failed to marshal metric record: %w", err)
-		}
-
-		msg := &sarama.ProducerMessage{
-			Topic: "otel-metrics",
-			Value: sarama.ByteEncoder(payload),
-		}
-
-		partition, offset, err := i.producer.SendMessage(msg)
-		if err != nil {
-			if i.debugIngestion {
-				fmt.Printf("[DEBUG INGESTION] Failed to send metric to Kafka: %v\n", err)
-			}
-			return fmt.Errorf("failed to send metric to Kafka: %w", err)
-		}
-		if i.debugIngestion {
-			fmt.Printf("[DEBUG INGESTION] Sent metric to Kafka partition=%d offset=%d\n", partition, offset)
-		}
+	if err := i.client.Insert(ctx, "otel_metrics", records); err != nil {
+		return fmt.Errorf("failed to insert metrics into Clickhouse: %w", err)
 	}
 
 	if i.debugIngestion {
-		fmt.Printf("[DEBUG INGESTION] Successfully published %d metrics to Kafka\n", len(records))
+		fmt.Printf("[DEBUG INGESTION] Successfully inserted %d metrics\n", len(records))
 	}
 
-	// Record observability metrics
 	i.obs.RecordIngestion(ctx, "metrics", int64(len(records)))
-	i.obs.RecordKafkaPublish(ctx, "otel-metrics", int64(len(records)))
-
 	return nil
 }
 
-// IngestLogs ingests logs into Pinot
+// IngestLogs ingests logs into Clickhouse
 func (i *Ingester) IngestLogs(ctx context.Context, tenantID int, logs plog.Logs) error {
 	ctx, span := i.obs.Tracer().Start(ctx, "ingestion.logs")
 	defer span.End()
@@ -276,24 +204,30 @@ func (i *Ingester) IngestLogs(ctx context.Context, tenantID int, logs plog.Logs)
 				logRecord := sl.LogRecords().At(idx)
 				attrs := logRecord.Attributes().AsRaw()
 
+				remainingAttrs := removeKnownKeys(attrs, logKnownKeys)
+				attrsJSON, _ := json.Marshal(remainingAttrs)
+				remainingResourceAttrs := removeKnownKeys(resourceAttrs, logResourceKnownKeys)
+				resourceAttrsJSON, _ := json.Marshal(remainingResourceAttrs)
+
 				record := map[string]interface{}{
 					"tenant_id":       tenantID,
 					"timestamp":       logRecord.Timestamp().AsTime().UnixMilli(),
 					"trace_id":        logRecord.TraceID().String(),
 					"span_id":         logRecord.SpanID().String(),
-					"severity_number": logRecord.SeverityNumber(),
+					"severity_number": int32(logRecord.SeverityNumber()),
 					"severity_text":   logRecord.SeverityText(),
 					"body":            logRecord.Body().AsString(),
 
-					// Extract common attributes
-					"service_name": extractString(resourceAttrs, "service.name"),
-					"host_name":    extractString(resourceAttrs, "host.name"),
-					"log_level":    extractString(attrs, "log.level"),
-					"log_source":   extractString(attrs, "log.source"),
+					"service_name": stringOrEmpty(extractString(resourceAttrs, "service.name")),
+					"host_name":    stringOrEmpty(extractString(resourceAttrs, "host.name")),
+					"log_level":    stringOrEmpty(extractString(attrs, "log.level")),
+					"log_source":   stringOrEmpty(extractString(attrs, "log.source")),
+					"job":          stringOrEmpty(extractString(attrs, "job")),
+					"instance":     stringOrEmpty(extractString(attrs, "instance")),
+					"environment":  stringOrEmpty(extractString(attrs, "environment")),
 
-					// Store remaining attributes as JSON
-					"attributes":          removeKnownKeys(attrs, logKnownKeys),
-					"resource_attributes": removeKnownKeys(resourceAttrs, logResourceKnownKeys),
+					"attributes":          string(attrsJSON),
+					"resource_attributes": string(resourceAttrsJSON),
 				}
 
 				records = append(records, record)
@@ -309,48 +243,33 @@ func (i *Ingester) IngestLogs(ctx context.Context, tenantID int, logs plog.Logs)
 	}
 
 	if i.debugIngestion {
-		fmt.Printf("[DEBUG INGESTION] Publishing %d log records to Kafka\n", len(records))
+		fmt.Printf("[DEBUG INGESTION] Inserting %d log records into Clickhouse\n", len(records))
 	}
 
-	// Publish records to Kafka
-	for _, record := range records {
-		payload, err := json.Marshal(record)
-		if err != nil {
-			if i.debugIngestion {
-				fmt.Printf("[DEBUG INGESTION] Failed to marshal log: %v\n", err)
-			}
-			return fmt.Errorf("failed to marshal log record: %w", err)
-		}
-
-		msg := &sarama.ProducerMessage{
-			Topic: "otel-logs",
-			Value: sarama.ByteEncoder(payload),
-		}
-
-		partition, offset, err := i.producer.SendMessage(msg)
-		if err != nil {
-			if i.debugIngestion {
-				fmt.Printf("[DEBUG INGESTION] Failed to send log to Kafka: %v\n", err)
-			}
-			return fmt.Errorf("failed to send log to Kafka: %w", err)
-		}
-		if i.debugIngestion {
-			fmt.Printf("[DEBUG INGESTION] Sent log to Kafka partition=%d offset=%d\n", partition, offset)
-		}
+	if err := i.client.Insert(ctx, "otel_logs", records); err != nil {
+		return fmt.Errorf("failed to insert logs into Clickhouse: %w", err)
 	}
 
 	if i.debugIngestion {
-		fmt.Printf("[DEBUG INGESTION] Successfully published %d logs to Kafka\n", len(records))
+		fmt.Printf("[DEBUG INGESTION] Successfully inserted %d logs\n", len(records))
 	}
 
-	// Record observability metrics
 	i.obs.RecordIngestion(ctx, "logs", int64(len(records)))
-	i.obs.RecordKafkaPublish(ctx, "otel-logs", int64(len(records)))
-
 	return nil
 }
 
-// convertGauge converts gauge metrics to Pinot records
+// stringOrEmpty returns the string value from an interface{} or "" if nil
+func stringOrEmpty(v interface{}) string {
+	if v == nil {
+		return ""
+	}
+	if s, ok := v.(string); ok {
+		return s
+	}
+	return fmt.Sprintf("%v", v)
+}
+
+// convertGauge converts gauge metrics to Clickhouse records
 func (i *Ingester) convertGauge(tenantID int, metric pmetric.Metric, resourceAttrs map[string]interface{}) []map[string]interface{} {
 	records := make([]map[string]interface{}, 0)
 	gauge := metric.Gauge()
@@ -359,26 +278,33 @@ func (i *Ingester) convertGauge(tenantID int, metric pmetric.Metric, resourceAtt
 		dp := gauge.DataPoints().At(j)
 		attrs := dp.Attributes().AsRaw()
 
+		remainingAttrs := removeKnownKeys(attrs, metricKnownKeys)
+		attrsJSON, _ := json.Marshal(remainingAttrs)
+		remainingResourceAttrs := removeKnownKeys(resourceAttrs, metricResourceKnownKeys)
+		resourceAttrsJSON, _ := json.Marshal(remainingResourceAttrs)
+
 		record := map[string]interface{}{
 			"tenant_id":   tenantID,
 			"metric_name": metric.Name(),
 			"metric_type": "gauge",
 			"timestamp":   dp.Timestamp().AsTime().UnixMilli(),
 			"value":       getDataPointValue(dp),
+			"count":       uint64(0),
+			"sum":         float64(0),
 
-			// Extract common attributes
-			"service_name": extractString(resourceAttrs, "service.name"),
-			"host_name":    extractString(resourceAttrs, "host.name"),
-			"environment":  extractString(attrs, "environment"),
-			"job":          extractString(attrs, "job"),
-			"instance":     extractString(attrs, "instance"),
+			"service_name": stringOrEmpty(extractString(resourceAttrs, "service.name")),
+			"host_name":    stringOrEmpty(extractString(resourceAttrs, "host.name")),
+			"environment":  stringOrEmpty(extractString(attrs, "environment")),
+			"job":          stringOrEmpty(extractString(attrs, "job")),
+			"instance":     stringOrEmpty(extractString(attrs, "instance")),
 
-			// Store remaining attributes as JSON
-			"attributes":          removeKnownKeys(attrs, metricKnownKeys),
-			"resource_attributes": removeKnownKeys(resourceAttrs, metricResourceKnownKeys),
+			"exemplar_trace_id": "",
+			"exemplar_span_id":  "",
+
+			"attributes":          string(attrsJSON),
+			"resource_attributes": string(resourceAttrsJSON),
 		}
 
-		// Add exemplars if present (the "wormhole" for trace correlation)
 		if dp.Exemplars().Len() > 0 {
 			exemplar := dp.Exemplars().At(0)
 			if !exemplar.TraceID().IsEmpty() {
@@ -395,7 +321,7 @@ func (i *Ingester) convertGauge(tenantID int, metric pmetric.Metric, resourceAtt
 	return records
 }
 
-// convertSum converts sum metrics to Pinot records
+// convertSum converts sum metrics to Clickhouse records
 func (i *Ingester) convertSum(tenantID int, metric pmetric.Metric, resourceAttrs map[string]interface{}) []map[string]interface{} {
 	records := make([]map[string]interface{}, 0)
 	sum := metric.Sum()
@@ -404,26 +330,33 @@ func (i *Ingester) convertSum(tenantID int, metric pmetric.Metric, resourceAttrs
 		dp := sum.DataPoints().At(j)
 		attrs := dp.Attributes().AsRaw()
 
+		remainingAttrs := removeKnownKeys(attrs, metricKnownKeys)
+		attrsJSON, _ := json.Marshal(remainingAttrs)
+		remainingResourceAttrs := removeKnownKeys(resourceAttrs, metricResourceKnownKeys)
+		resourceAttrsJSON, _ := json.Marshal(remainingResourceAttrs)
+
 		record := map[string]interface{}{
 			"tenant_id":   tenantID,
 			"metric_name": metric.Name(),
 			"metric_type": "sum",
 			"timestamp":   dp.Timestamp().AsTime().UnixMilli(),
 			"value":       getDataPointValue(dp),
+			"count":       uint64(0),
+			"sum":         float64(0),
 
-			// Extract common attributes
-			"service_name": extractString(resourceAttrs, "service.name"),
-			"host_name":    extractString(resourceAttrs, "host.name"),
-			"environment":  extractString(attrs, "environment"),
-			"job":          extractString(attrs, "job"),
-			"instance":     extractString(attrs, "instance"),
+			"service_name": stringOrEmpty(extractString(resourceAttrs, "service.name")),
+			"host_name":    stringOrEmpty(extractString(resourceAttrs, "host.name")),
+			"environment":  stringOrEmpty(extractString(attrs, "environment")),
+			"job":          stringOrEmpty(extractString(attrs, "job")),
+			"instance":     stringOrEmpty(extractString(attrs, "instance")),
 
-			// Store remaining attributes as JSON
-			"attributes":          removeKnownKeys(attrs, metricKnownKeys),
-			"resource_attributes": removeKnownKeys(resourceAttrs, metricResourceKnownKeys),
+			"exemplar_trace_id": "",
+			"exemplar_span_id":  "",
+
+			"attributes":          string(attrsJSON),
+			"resource_attributes": string(resourceAttrsJSON),
 		}
 
-		// Add exemplars if present (the "wormhole" for trace correlation)
 		if dp.Exemplars().Len() > 0 {
 			exemplar := dp.Exemplars().At(0)
 			if !exemplar.TraceID().IsEmpty() {
@@ -440,7 +373,7 @@ func (i *Ingester) convertSum(tenantID int, metric pmetric.Metric, resourceAttrs
 	return records
 }
 
-// convertHistogram converts histogram metrics to Pinot records
+// convertHistogram converts histogram metrics to Clickhouse records
 func (i *Ingester) convertHistogram(tenantID int, metric pmetric.Metric, resourceAttrs map[string]interface{}) []map[string]interface{} {
 	records := make([]map[string]interface{}, 0)
 	histogram := metric.Histogram()
@@ -449,27 +382,33 @@ func (i *Ingester) convertHistogram(tenantID int, metric pmetric.Metric, resourc
 		dp := histogram.DataPoints().At(j)
 		attrs := dp.Attributes().AsRaw()
 
+		remainingAttrs := removeKnownKeys(attrs, metricKnownKeys)
+		attrsJSON, _ := json.Marshal(remainingAttrs)
+		remainingResourceAttrs := removeKnownKeys(resourceAttrs, metricResourceKnownKeys)
+		resourceAttrsJSON, _ := json.Marshal(remainingResourceAttrs)
+
 		record := map[string]interface{}{
 			"tenant_id":   tenantID,
 			"metric_name": metric.Name(),
 			"metric_type": "histogram",
 			"timestamp":   dp.Timestamp().AsTime().UnixMilli(),
+			"value":       float64(0),
 			"count":       dp.Count(),
 			"sum":         dp.Sum(),
 
-			// Extract common attributes
-			"service_name": extractString(resourceAttrs, "service.name"),
-			"host_name":    extractString(resourceAttrs, "host.name"),
-			"environment":  extractString(attrs, "environment"),
-			"job":          extractString(attrs, "job"),
-			"instance":     extractString(attrs, "instance"),
+			"service_name": stringOrEmpty(extractString(resourceAttrs, "service.name")),
+			"host_name":    stringOrEmpty(extractString(resourceAttrs, "host.name")),
+			"environment":  stringOrEmpty(extractString(attrs, "environment")),
+			"job":          stringOrEmpty(extractString(attrs, "job")),
+			"instance":     stringOrEmpty(extractString(attrs, "instance")),
 
-			// Store remaining attributes as JSON
-			"attributes":          removeKnownKeys(attrs, metricKnownKeys),
-			"resource_attributes": removeKnownKeys(resourceAttrs, metricResourceKnownKeys),
+			"exemplar_trace_id": "",
+			"exemplar_span_id":  "",
+
+			"attributes":          string(attrsJSON),
+			"resource_attributes": string(resourceAttrsJSON),
 		}
 
-		// Add exemplars if present (the "wormhole" for trace correlation)
 		if dp.Exemplars().Len() > 0 {
 			exemplar := dp.Exemplars().At(0)
 			if !exemplar.TraceID().IsEmpty() {

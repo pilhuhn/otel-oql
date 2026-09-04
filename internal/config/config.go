@@ -12,11 +12,8 @@ import (
 
 // Config holds the application configuration
 type Config struct {
-	// Pinot configuration
-	PinotURL string `yaml:"pinot_url"`
-
-	// Kafka configuration
-	KafkaBrokers string `yaml:"kafka_brokers"`
+	// Clickhouse configuration
+	ClickhouseURL string `yaml:"clickhouse_url"`
 
 	// OTLP receiver ports
 	OTLPGRPCPort int `yaml:"otlp_grpc_port"`
@@ -50,7 +47,7 @@ type Config struct {
 	DebugTranslation bool `yaml:"debug_translation"` // Debug logging for query translation
 
 	// Startup validation
-	ExitOnFailure bool `yaml:"exit_on_failure"` // Exit if Kafka/Pinot validation fails at startup
+	ExitOnFailure bool `yaml:"exit_on_failure"` // Exit if Clickhouse validation fails at startup
 }
 
 // Load reads configuration from config file, environment variables, and command-line flags
@@ -63,8 +60,7 @@ func Load() (*Config, error) {
 	flag.StringVar(&configFile, "config", "", "Path to config file (default: ./otel-oql.yaml or ~/.otel-oql/config.yaml)")
 
 	// Define other flags with empty defaults (will be filled from config file or env)
-	var pinotURL string
-	var kafkaBrokers string
+	var clickhouseURL string
 	var otlpGRPCPort int
 	var otlpHTTPPort int
 	var queryAPIPort int
@@ -82,8 +78,7 @@ func Load() (*Config, error) {
 	var debugTranslation bool
 	var exitOnFailure bool
 
-	flag.StringVar(&pinotURL, "pinot-url", "", "Apache Pinot broker URL")
-	flag.StringVar(&kafkaBrokers, "kafka-brokers", "", "Kafka broker addresses")
+	flag.StringVar(&clickhouseURL, "clickhouse-url", "", "Clickhouse HTTP URL")
 	flag.IntVar(&otlpGRPCPort, "otlp-grpc-port", 0, "OTLP gRPC receiver port")
 	flag.IntVar(&otlpHTTPPort, "otlp-http-port", 0, "OTLP HTTP receiver port")
 	flag.BoolVar(&testMode, "test-mode", false, "Enable test mode (default tenant-id=0)")
@@ -99,7 +94,7 @@ func Load() (*Config, error) {
 	flag.BoolVar(&debugIngestion, "debug-ingestion", false, "Enable debug logging for data ingestion")
 	flag.BoolVar(&debugQuery, "debug-query", false, "Enable debug logging for query execution")
 	flag.BoolVar(&debugTranslation, "debug-translation", false, "Enable debug logging for query translation")
-	flag.BoolVar(&exitOnFailure, "exit-on-failure", false, "Exit if Kafka/Pinot validation fails at startup")
+	flag.BoolVar(&exitOnFailure, "exit-on-failure", false, "Exit if Clickhouse validation fails at startup")
 
 	flag.Parse()
 
@@ -109,11 +104,8 @@ func Load() (*Config, error) {
 	}
 
 	// 2. Override with environment variables
-	if env := os.Getenv("PINOT_URL"); env != "" {
-		cfg.PinotURL = env
-	}
-	if env := os.Getenv("KAFKA_BROKERS"); env != "" {
-		cfg.KafkaBrokers = env
+	if env := os.Getenv("CLICKHOUSE_URL"); env != "" {
+		cfg.ClickhouseURL = env
 	}
 	if env := os.Getenv("OTLP_GRPC_PORT"); env != "" {
 		if val, err := strconv.Atoi(env); err == nil {
@@ -187,11 +179,8 @@ func Load() (*Config, error) {
 	}
 
 	// 3. Override with CLI flags (if provided)
-	if pinotURL != "" {
-		cfg.PinotURL = pinotURL
-	}
-	if kafkaBrokers != "" {
-		cfg.KafkaBrokers = kafkaBrokers
+	if clickhouseURL != "" {
+		cfg.ClickhouseURL = clickhouseURL
 	}
 	if otlpGRPCPort != 0 {
 		cfg.OTLPGRPCPort = otlpGRPCPort
@@ -254,11 +243,8 @@ func Load() (*Config, error) {
 	}
 
 	// Apply defaults if still not set
-	if cfg.PinotURL == "" {
-		cfg.PinotURL = "http://localhost:9000"
-	}
-	if cfg.KafkaBrokers == "" {
-		cfg.KafkaBrokers = "localhost:9092"
+	if cfg.ClickhouseURL == "" {
+		cfg.ClickhouseURL = "http://localhost:8123"
 	}
 	if cfg.OTLPGRPCPort == 0 {
 		cfg.OTLPGRPCPort = 4317
@@ -315,21 +301,16 @@ func (cfg *Config) validate() error {
 	// Mode-specific validation
 	switch cfg.Mode {
 	case "ingestion":
-		if cfg.KafkaBrokers == "" {
-			return fmt.Errorf("kafka-brokers is required for ingestion mode")
+		if cfg.ClickhouseURL == "" {
+			return fmt.Errorf("clickhouse-url is required for ingestion mode")
 		}
-		// Pinot URL not required in ingestion mode
 	case "query":
-		if cfg.PinotURL == "" {
-			return fmt.Errorf("pinot-url is required for query mode")
+		if cfg.ClickhouseURL == "" {
+			return fmt.Errorf("clickhouse-url is required for query mode")
 		}
-		// Kafka not required in query mode
 	case "all":
-		if cfg.PinotURL == "" {
-			return fmt.Errorf("pinot-url is required")
-		}
-		if cfg.KafkaBrokers == "" {
-			return fmt.Errorf("kafka-brokers is required")
+		if cfg.ClickhouseURL == "" {
+			return fmt.Errorf("clickhouse-url is required")
 		}
 	}
 

@@ -16,16 +16,16 @@ func TestMetricLabelDistinctExpr(t *testing.T) {
 		t.Errorf("job: got %q", got)
 	}
 	unknown := MetricLabelDistinctExpr("custom_label")
-	if !strings.HasPrefix(unknown, "JSON_EXTRACT_SCALAR(attributes, ") {
-		t.Errorf("unknown: expected JSON_EXTRACT_SCALAR, got %q", unknown)
+	if !strings.HasPrefix(unknown, "JSONExtractString(attributes, ") {
+		t.Errorf("unknown: expected JSONExtractString, got %q", unknown)
 	}
-	if !strings.Contains(unknown, sqlutil.JSONObjectKeyPathLiteral("custom_label")) {
+	if !strings.Contains(unknown, sqlutil.StringLiteral("custom_label")) {
 		t.Errorf("unknown: literal not embedded safely: %q", unknown)
 	}
 	malicious := MetricLabelDistinctExpr("x) OR (1=1")
-	wantLit := sqlutil.JSONObjectKeyPathLiteral("x) OR (1=1")
+	wantLit := sqlutil.StringLiteral("x) OR (1=1")
 	if !strings.Contains(malicious, wantLit) {
-		t.Errorf("expected escaped path literal in expression, got %q", malicious)
+		t.Errorf("expected escaped literal in expression, got %q", malicious)
 	}
 }
 
@@ -38,7 +38,7 @@ func TestLogLabelDistinctExpr(t *testing.T) {
 		t.Errorf("level: got %q", got)
 	}
 	unknown := LogLabelDistinctExpr("app")
-	if !strings.HasPrefix(unknown, "JSON_EXTRACT_SCALAR(attributes, ") {
-		t.Errorf("unknown: expected JSON_EXTRACT_SCALAR, got %q", unknown)
+	if !strings.HasPrefix(unknown, "JSONExtractString(attributes, ") {
+		t.Errorf("unknown: expected JSONExtractString, got %q", unknown)
 	}
 }

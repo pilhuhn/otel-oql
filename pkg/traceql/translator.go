@@ -8,7 +8,7 @@ import (
 	"github.com/pilhuhn/otel-oql/pkg/sqlutil"
 )
 
-// Translator translates TraceQL queries to Pinot SQL
+// Translator translates TraceQL queries to Clickhouse SQL
 type Translator struct {
 	tenantID int
 	start    *time.Time // Optional start time for range queries
@@ -20,7 +20,7 @@ func NewTranslator(tenantID int) *Translator {
 	return &Translator{tenantID: tenantID}
 }
 
-// TranslateQuery translates a TraceQL query to Pinot SQL
+// TranslateQuery translates a TraceQL query to Clickhouse SQL
 func (t *Translator) TranslateQuery(traceql string) ([]string, error) {
 	// Parse the TraceQL query
 	parser := NewParser(traceql)
@@ -54,7 +54,7 @@ func (t *Translator) TranslateQuery(traceql string) ([]string, error) {
 	}
 }
 
-// TranslateQueryWithTimeRange translates a TraceQL query to Pinot SQL with time range filter
+// TranslateQueryWithTimeRange translates a TraceQL query to Clickhouse SQL with time range filter
 func (t *Translator) TranslateQueryWithTimeRange(traceql string, start, end *time.Time) ([]string, error) {
 	// Store time range in translator
 	t.start = start
@@ -83,11 +83,11 @@ func (t *Translator) translateSpanFilterExpr(expr *SpanFilterExpr) (string, erro
 	if t.start != nil && t.end != nil {
 		startMillis := t.start.UnixMilli()
 		endMillis := t.end.UnixMilli()
-		sql += fmt.Sprintf(" AND \"timestamp\" >= %d AND \"timestamp\" <= %d", startMillis, endMillis)
+		sql += fmt.Sprintf(" AND timestamp >= %d AND timestamp <= %d", startMillis, endMillis)
 	}
 
 	// Order by timestamp descending (most recent first)
-	sql += " ORDER BY \"timestamp\" DESC"
+	sql += " ORDER BY timestamp DESC"
 
 	return sql, nil
 }
@@ -109,7 +109,7 @@ func (t *Translator) translateCondition(condition Condition) (string, error) {
 		}
 	}
 
-	// Special handling for status values (convert to Pinot status codes)
+	// Special handling for status values
 	if condition.Field.Type == "intrinsic" && condition.Field.Name == "status" {
 		if statusValue, ok := condition.Value.(StatusValue); ok {
 			statusCode := translateStatusValue(statusValue)
@@ -132,7 +132,7 @@ func (t *Translator) translateCondition(condition Condition) (string, error) {
 		if err != nil {
 			return "", err
 		}
-		return fmt.Sprintf("REGEXP_LIKE(%s, %s)", fieldRef, valueStr), nil
+		return fmt.Sprintf("match(%s, %s)", fieldRef, valueStr), nil
 
 	case "!~":
 		// Regex not match
@@ -140,7 +140,7 @@ func (t *Translator) translateCondition(condition Condition) (string, error) {
 		if err != nil {
 			return "", err
 		}
-		return fmt.Sprintf("NOT REGEXP_LIKE(%s, %s)", fieldRef, valueStr), nil
+		return fmt.Sprintf("NOT match(%s, %s)", fieldRef, valueStr), nil
 
 	default:
 		return "", fmt.Errorf("unsupported operator: %s", condition.Operator)
@@ -206,9 +206,7 @@ func (t *Translator) getSpanAttributeColumn(attrName string) string {
 	}
 
 	// Not a native column - use JSON extraction
-	// Convert dotted attribute name to JSON path
-	// Example: custom.field.name → $.custom.field.name
-	return fmt.Sprintf("JSON_EXTRACT_SCALAR(attributes, %s, 'STRING')", sqlutil.JSONObjectKeyPathLiteral(attrName))
+	return fmt.Sprintf("JSONExtractString(attributes, %s)", sqlutil.StringLiteral(attrName))
 }
 
 // getResourceAttributeColumn maps resource attribute names to native columns or JSON extraction
@@ -223,7 +221,7 @@ func (t *Translator) getResourceAttributeColumn(attrName string) string {
 	}
 
 	// Not a native column - use JSON extraction from resource_attributes
-	return fmt.Sprintf("JSON_EXTRACT_SCALAR(resource_attributes, %s, 'STRING')", sqlutil.JSONObjectKeyPathLiteral(attrName))
+	return fmt.Sprintf("JSONExtractString(resource_attributes, %s)", sqlutil.StringLiteral(attrName))
 }
 
 // formatValue formats a value for SQL
@@ -278,7 +276,7 @@ func (t *Translator) translateAggregateExpr(expr *AggregateExpr) (string, error)
 	if t.start != nil && t.end != nil {
 		startMillis := t.start.UnixMilli()
 		endMillis := t.end.UnixMilli()
-		sql += fmt.Sprintf(" AND \"timestamp\" >= %d AND \"timestamp\" <= %d", startMillis, endMillis)
+		sql += fmt.Sprintf(" AND timestamp >= %d AND timestamp <= %d", startMillis, endMillis)
 	}
 
 	// Determine aggregation function
@@ -353,7 +351,5 @@ func (t *Translator) translateGroupingField(field string) (string, error) {
 // translateScalarExpr translates a scalar expression to SQL
 // This handles connection tests like 1+1 from Grafana
 func (t *Translator) translateScalarExpr(expr *ScalarExpr) string {
-	// Return a SQL query that produces this scalar value
-	// Pinot requires a FROM clause, so we use otel_spans with LIMIT 1
 	return fmt.Sprintf("SELECT %f AS value FROM otel_spans LIMIT 1", expr.Value)
 }

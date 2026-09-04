@@ -5,24 +5,20 @@ import (
 	"flag"
 	"fmt"
 
-	"github.com/pilhuhn/otel-oql/pkg/pinot"
+	"github.com/pilhuhn/otel-oql/pkg/clickhouse"
 )
 
 // setupSchemaCommand runs the schema setup
 func setupSchemaCommand() error {
-	pinotURL := flag.String("pinot-url", "http://localhost:9000", "Pinot broker URL")
+	clickhouseURL := flag.String("clickhouse-url", "http://localhost:8123", "Clickhouse HTTP URL")
 	flag.Parse()
 
-	if *pinotURL == "" {
-		return fmt.Errorf("pinot-url is required")
-	}
+	fmt.Printf("Setting up Clickhouse schema at %s...\n", *clickhouseURL)
 
-	fmt.Printf("Setting up Pinot schema at %s...\n", *pinotURL)
-
-	client := pinot.NewClient(*pinotURL)
+	client := clickhouse.NewClient(*clickhouseURL)
 	ctx := context.Background()
 
-	if err := pinot.SetupSchema(ctx, client); err != nil {
+	if err := clickhouse.SetupSchema(ctx, client); err != nil {
 		return fmt.Errorf("failed to setup schema: %w", err)
 	}
 

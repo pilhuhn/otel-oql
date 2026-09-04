@@ -9,7 +9,7 @@ import (
 	"github.com/pilhuhn/otel-oql/pkg/sqlutil"
 )
 
-// Translator translates OQL queries to Pinot SQL
+// Translator translates OQL queries to Clickhouse SQL
 type Translator struct {
 	tenantID      int
 	groupByFields []string // Track group by fields for aggregations
@@ -22,7 +22,7 @@ func NewTranslator(tenantID int) *Translator {
 	}
 }
 
-// TranslateQuery translates an OQL query to one or more Pinot SQL queries
+// TranslateQuery translates an OQL query to one or more Clickhouse SQL queries
 func (t *Translator) TranslateQuery(query *oql.Query) ([]string, error) {
 	queries := make([]string, 0)
 
@@ -148,7 +148,7 @@ func (t *Translator) TranslateQuery(query *oql.Query) ([]string, error) {
 	// Only add for regular queries, not special marker queries (expand, correlate)
 	if !hasSortOp && !strings.Contains(sql, "__EXPAND_") && !strings.Contains(sql, "__CORRELATE__") {
 		if query.Signal == oql.SignalSpans || query.Signal == oql.SignalTraces || query.Signal == oql.SignalLogs {
-			sql += " ORDER BY \"timestamp\" DESC"
+			sql += " ORDER BY timestamp DESC"
 		}
 	}
 
@@ -186,7 +186,7 @@ func (t *Translator) translateCondition(cond oql.Condition) (string, error) {
 	}
 }
 
-// translateFieldReference maps an OQL field (column or attributes.key) to a Pinot SQL expression.
+// translateFieldReference maps an OQL field (column or attributes.key) to a Clickhouse SQL expression.
 func (t *Translator) translateFieldReference(field string) (string, error) {
 	field = strings.TrimSpace(field)
 	if field == "" {
@@ -219,16 +219,12 @@ func (t *Translator) translateFieldReference(field string) (string, error) {
 			if nativeColumn := t.getNativeColumn(rest); nativeColumn != "" {
 				return nativeColumn, nil
 			}
-			return fmt.Sprintf("JSON_EXTRACT_SCALAR(%s, %s, 'STRING')", prefix, jsonPathLiteral(rest)), nil
+			return fmt.Sprintf("JSONExtractString(%s, %s)", prefix, sqlutil.StringLiteral(rest)), nil
 		}
 		return "", fmt.Errorf("invalid field %q: only attributes.<key> or resource_attributes.<key> may use dot notation", field)
 	}
 	if err := validatePlainIdentifier(field); err != nil {
 		return "", err
-	}
-	// Quote reserved keywords (timestamp is reserved in Pinot SQL)
-	if field == "timestamp" {
-		return `"timestamp"`, nil
 	}
 	return field, nil
 }
@@ -328,7 +324,7 @@ func (t *Translator) getNativeColumn(attributeKey string) string {
 func (t *Translator) formatValue(value interface{}) string {
 	switch v := value.(type) {
 	case *oql.NowExpression:
-		return "now()"
+		return "(toUnixTimestamp(now()) * 1000)"
 	case *oql.TimeArithmeticExpression:
 		return t.formatTimeArithmetic(v)
 	case string:
@@ -359,17 +355,11 @@ func (t *Translator) formatTimeArithmetic(expr *oql.TimeArithmeticExpression) st
 		return fmt.Sprintf("'PARSE_ERROR: %v'", err)
 	}
 
-	// Convert to milliseconds (Pinot timestamp unit)
+	// Convert to milliseconds
 	millis := duration.Milliseconds()
 
-	// Format the base expression
-	var base string
-	switch expr.Base.(type) {
-	case *oql.NowExpression:
-		base = "now()"
-	default:
-		base = "now()" // Default to now()
-	}
+	// Format the base expression (always in milliseconds)
+	base := "(toUnixTimestamp(now()) * 1000)"
 
 	// Build the arithmetic expression
 	if expr.Operator == "-" {
@@ -554,13 +544,11 @@ func (t *Translator) translateSince(since *oql.SinceOp) (string, error) {
 		d, _ := time.ParseDuration(duration)
 		millis := d.Milliseconds()
 
-		// Use Pinot's timestamp functions
-		sql := fmt.Sprintf("\"timestamp\" >= (now() - %d)", millis)
+		sql := fmt.Sprintf("timestamp >= (toUnixTimestamp(now()) * 1000 - %d)", millis)
 		return sql, nil
 	}
 
 	// Otherwise, try to parse as a timestamp (e.g., "2024-03-20")
-	// Pinot timestamps are in milliseconds since epoch
 	ts, err := time.Parse("2006-01-02", duration)
 	if err != nil {
 		// Try with time as well
@@ -571,7 +559,7 @@ func (t *Translator) translateSince(since *oql.SinceOp) (string, error) {
 	}
 
 	millis := ts.UnixMilli()
-	sql := fmt.Sprintf("\"timestamp\" >= %d", millis)
+	sql := fmt.Sprintf("timestamp >= %d", millis)
 	return sql, nil
 }
 
@@ -598,6 +586,6 @@ func (t *Translator) translateBetween(between *oql.BetweenOp) (string, error) {
 	startMillis := startTime.UnixMilli()
 	endMillis := endTime.UnixMilli()
 
-	sql := fmt.Sprintf("\"timestamp\" >= %d AND \"timestamp\" <= %d", startMillis, endMillis)
+	sql := fmt.Sprintf("timestamp >= %d AND timestamp <= %d", startMillis, endMillis)
 	return sql, nil
 }

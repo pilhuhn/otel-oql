@@ -70,7 +70,7 @@ func TestTranslator_BasicQueryTranslation(t *testing.T) {
 				expectedSQL += " AND (parent_span_id IS NULL OR parent_span_id = '' OR parent_span_id = '0' OR parent_span_id = '00000000000000000000000000000000')"
 			}
 			if tt.expectOrdering {
-				expectedSQL += " ORDER BY \"timestamp\" DESC"
+				expectedSQL += " ORDER BY timestamp DESC"
 			}
 			assert.Equal(t, expectedSQL, sqls[0])
 		})
@@ -190,7 +190,7 @@ func TestTranslator_WhereWithJSONExtraction(t *testing.T) {
 	require.Len(t, sqls, 1)
 
 	// Should use JSON extraction for non-native attributes
-	assert.Contains(t, sqls[0], "JSON_EXTRACT_SCALAR(attributes, '$.custom_field', 'STRING')")
+	assert.Contains(t, sqls[0], "JSONExtractString(attributes, 'custom_field')")
 	assert.Contains(t, sqls[0], "= 'value'")
 }
 
@@ -741,7 +741,7 @@ func TestTranslator_AttributeKeyWithSingleQuoteEscaped(t *testing.T) {
 	sqls, err := translator.TranslateQuery(query)
 	require.NoError(t, err)
 	require.Len(t, sqls, 1)
-	assert.Contains(t, sqls[0], "JSON_EXTRACT_SCALAR(attributes, '$.test''key', 'STRING')")
+	assert.Contains(t, sqls[0], "JSONExtractString(attributes, 'test''key')")
 	assert.Contains(t, sqls[0], "= 'v'")
 }
 
@@ -984,7 +984,7 @@ func TestTranslator_NowExpression(t *testing.T) {
 					},
 				},
 			},
-			wantContain: "\"timestamp\" = now()",
+			wantContain: "timestamp = (toUnixTimestamp(now()) * 1000)",
 			description: "now() should translate to Pinot now() function",
 		},
 		{
@@ -1001,7 +1001,7 @@ func TestTranslator_NowExpression(t *testing.T) {
 					},
 				},
 			},
-			wantContain: "\"timestamp\" > now()",
+			wantContain: "timestamp > (toUnixTimestamp(now()) * 1000)",
 			description: "greater than now() comparison",
 		},
 		{
@@ -1018,7 +1018,7 @@ func TestTranslator_NowExpression(t *testing.T) {
 					},
 				},
 			},
-			wantContain: "\"timestamp\" < now()",
+			wantContain: "timestamp < (toUnixTimestamp(now()) * 1000)",
 			description: "less than now() comparison",
 		},
 		{
@@ -1035,7 +1035,7 @@ func TestTranslator_NowExpression(t *testing.T) {
 					},
 				},
 			},
-			wantContain: "\"timestamp\" >= now()",
+			wantContain: "timestamp >= (toUnixTimestamp(now()) * 1000)",
 			description: "greater than or equal now() comparison",
 		},
 	}
@@ -1076,7 +1076,7 @@ func TestTranslator_TimeArithmeticExpression(t *testing.T) {
 					},
 				},
 			},
-			wantContain: "\"timestamp\" > (now() - 3600000)",
+			wantContain: "timestamp > ((toUnixTimestamp(now()) * 1000) - 3600000)",
 			description: "1 hour = 3600000 milliseconds",
 		},
 		{
@@ -1097,7 +1097,7 @@ func TestTranslator_TimeArithmeticExpression(t *testing.T) {
 					},
 				},
 			},
-			wantContain: "\"timestamp\" >= (now() - 1800000)",
+			wantContain: "timestamp >= ((toUnixTimestamp(now()) * 1000) - 1800000)",
 			description: "30 minutes = 1800000 milliseconds",
 		},
 		{
@@ -1118,7 +1118,7 @@ func TestTranslator_TimeArithmeticExpression(t *testing.T) {
 					},
 				},
 			},
-			wantContain: "\"timestamp\" > (now() - 5000)",
+			wantContain: "timestamp > ((toUnixTimestamp(now()) * 1000) - 5000)",
 			description: "5 seconds = 5000 milliseconds",
 		},
 		{
@@ -1139,7 +1139,7 @@ func TestTranslator_TimeArithmeticExpression(t *testing.T) {
 					},
 				},
 			},
-			wantContain: "\"timestamp\" >= (now() - 100)",
+			wantContain: "timestamp >= ((toUnixTimestamp(now()) * 1000) - 100)",
 			description: "100 milliseconds",
 		},
 		{
@@ -1160,7 +1160,7 @@ func TestTranslator_TimeArithmeticExpression(t *testing.T) {
 					},
 				},
 			},
-			wantContain: "\"timestamp\" < (now() + 3600000)",
+			wantContain: "timestamp < ((toUnixTimestamp(now()) * 1000) + 3600000)",
 			description: "future time: now() + 1 hour",
 		},
 		{
@@ -1181,7 +1181,7 @@ func TestTranslator_TimeArithmeticExpression(t *testing.T) {
 					},
 				},
 			},
-			wantContain: "\"timestamp\" <= (now() + 300000)",
+			wantContain: "timestamp <= ((toUnixTimestamp(now()) * 1000) + 300000)",
 			description: "future time: now() + 5 minutes",
 		},
 	}
@@ -1232,8 +1232,8 @@ func TestTranslator_ComplexTimeQueries(t *testing.T) {
 				},
 			},
 			wantContains: []string{
-				"\"timestamp\" > (now() - 3600000)",
-				"\"timestamp\" < now()",
+				"timestamp > ((toUnixTimestamp(now()) * 1000) - 3600000)",
+				"timestamp < (toUnixTimestamp(now()) * 1000)",
 			},
 			description: "time range from 1 hour ago to now",
 		},
@@ -1266,7 +1266,7 @@ func TestTranslator_ComplexTimeQueries(t *testing.T) {
 			},
 			wantContains: []string{
 				"name = 'checkout'",
-				"\"timestamp\" > (now() - 1800000)",
+				"timestamp > ((toUnixTimestamp(now()) * 1000) - 1800000)",
 			},
 			description: "name filter combined with time range",
 		},
@@ -1299,7 +1299,7 @@ func TestTranslator_ComplexTimeQueries(t *testing.T) {
 			},
 			wantContains: []string{
 				"log_level = 'error'",
-				"\"timestamp\" > (now() - 300000)",
+				"timestamp > ((toUnixTimestamp(now()) * 1000) - 300000)",
 				" OR ",
 			},
 			description: "error logs OR recent logs within 5 minutes",
@@ -1332,14 +1332,14 @@ func TestTranslator_TracesVsSpans(t *testing.T) {
 			name:             "signal=spans shows all spans",
 			signal:           oql.SignalSpans,
 			expectRootFilter: false,
-			expectedSQL:      "SELECT * FROM otel_spans WHERE tenant_id = 0 AND service_name = 'test-service' ORDER BY \"timestamp\" DESC",
+			expectedSQL:      "SELECT * FROM otel_spans WHERE tenant_id = 0 AND service_name = 'test-service' ORDER BY timestamp DESC",
 			description:      "spans query should show all spans, not just root spans",
 		},
 		{
 			name:             "signal=trace shows only root spans",
 			signal:           oql.SignalTraces,
 			expectRootFilter: true,
-			expectedSQL:      "SELECT * FROM otel_spans WHERE tenant_id = 0 AND (parent_span_id IS NULL OR parent_span_id = '' OR parent_span_id = '0' OR parent_span_id = '00000000000000000000000000000000') AND service_name = 'test-service' ORDER BY \"timestamp\" DESC",
+			expectedSQL:      "SELECT * FROM otel_spans WHERE tenant_id = 0 AND (parent_span_id IS NULL OR parent_span_id = '' OR parent_span_id = '0' OR parent_span_id = '00000000000000000000000000000000') AND service_name = 'test-service' ORDER BY timestamp DESC",
 			description:      "traces query should filter to show only root spans (one per trace)",
 		},
 	}
@@ -1481,13 +1481,13 @@ func TestTranslator_DefaultTimestampOrdering(t *testing.T) {
 			}
 
 			if tt.wantOrdering {
-				assert.Contains(t, sqls[0], "ORDER BY \"timestamp\" DESC", tt.description)
+				assert.Contains(t, sqls[0], "ORDER BY timestamp DESC", tt.description)
 			} else {
 				// If there's an explicit sort, check for that instead
 				if len(tt.query.Operations) > 0 {
 					if _, ok := tt.query.Operations[len(tt.query.Operations)-1].(*oql.SortOp); ok {
 						assert.Contains(t, sqls[0], "ORDER BY", tt.description)
-						assert.NotContains(t, sqls[0], "ORDER BY \"timestamp\" DESC", tt.description)
+						assert.NotContains(t, sqls[0], "ORDER BY timestamp DESC", tt.description)
 						return
 					}
 				}

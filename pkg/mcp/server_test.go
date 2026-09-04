@@ -8,21 +8,21 @@ import (
 	"testing"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
-	"github.com/pilhuhn/otel-oql/pkg/pinot"
+	"github.com/pilhuhn/otel-oql/pkg/clickhouse"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-// MockPinotClient implements PinotQuerier for testing
+// MockPinotClient implements ClickhouseQuerier for testing
 type MockPinotClient struct {
-	QueryFunc func(ctx context.Context, sql string) (*pinot.QueryResponse, error)
+	QueryFunc func(ctx context.Context, sql string) (*clickhouse.QueryResponse, error)
 }
 
-func (m *MockPinotClient) Query(ctx context.Context, sql string) (*pinot.QueryResponse, error) {
+func (m *MockPinotClient) Query(ctx context.Context, sql string) (*clickhouse.QueryResponse, error) {
 	if m.QueryFunc != nil {
 		return m.QueryFunc(ctx, sql)
 	}
-	resp := &pinot.QueryResponse{
+	resp := &clickhouse.QueryResponse{
 		TimeUsedMs: 5,
 	}
 	resp.ResultTable.DataSchema.ColumnNames = []string{"trace_id", "duration", "name"}
@@ -96,8 +96,8 @@ func TestMCP_SDK_ToolsList(t *testing.T) {
 
 func TestMCP_SDK_OQLQuery(t *testing.T) {
 	mockClient := &MockPinotClient{
-		QueryFunc: func(ctx context.Context, sql string) (*pinot.QueryResponse, error) {
-			resp := &pinot.QueryResponse{
+		QueryFunc: func(ctx context.Context, sql string) (*clickhouse.QueryResponse, error) {
+			resp := &clickhouse.QueryResponse{
 				TimeUsedMs: 5,
 			}
 			resp.ResultTable.DataSchema.ColumnNames = []string{"trace_id", "duration", "name"}
