@@ -21,13 +21,13 @@ else
     ERRORS=$((ERRORS + 1))
 fi
 
-# Check Kafka container
-echo -n "📦 Kafka container exists: "
-if podman ps -a --format '{{.Names}}' | grep -q '^kafka$'; then
+# Check Clickhouse container
+echo -n "📦 Clickhouse container exists: "
+if podman ps -a --format '{{.Names}}' | grep -q 'clickhouse'; then
     echo -e "${GREEN}✓${NC}"
 
-    echo -n "▶️  Kafka container running: "
-    if podman ps --format '{{.Names}}' | grep -q '^kafka$'; then
+    echo -n "▶️  Clickhouse container running: "
+    if podman ps --format '{{.Names}}' | grep -q 'clickhouse'; then
         echo -e "${GREEN}✓${NC}"
     else
         echo -e "${RED}✗${NC} Container exists but is stopped"
@@ -35,47 +35,18 @@ if podman ps -a --format '{{.Names}}' | grep -q '^kafka$'; then
         ERRORS=$((ERRORS + 1))
     fi
 else
-    echo -e "${RED}✗${NC} Kafka container not found"
+    echo -e "${RED}✗${NC} Clickhouse container not found"
     echo "   Run: podman compose up -d"
     ERRORS=$((ERRORS + 1))
 fi
 
-# Check Kafka connectivity
-echo -n "🏥 Kafka connectivity: "
-if nc -z localhost 9092 2>/dev/null; then
+# Check Clickhouse connectivity
+echo -n "🏥 Clickhouse health: "
+if curl -s http://localhost:8123/ping 2>/dev/null | grep -q "Ok"; then
     echo -e "${GREEN}✓${NC}"
 else
-    echo -e "${RED}✗${NC} Cannot connect to Kafka on localhost:9092"
-    echo "   Ensure Kafka is running: podman compose up -d"
-    ERRORS=$((ERRORS + 1))
-fi
-
-# Check Pinot container
-echo -n "📦 Pinot container exists: "
-if podman ps -a --format '{{.Names}}' | grep -q '^pinot-quickstart$'; then
-    echo -e "${GREEN}✓${NC}"
-
-    echo -n "▶️  Pinot container running: "
-    if podman ps --format '{{.Names}}' | grep -q '^pinot-quickstart$'; then
-        echo -e "${GREEN}✓${NC}"
-    else
-        echo -e "${RED}✗${NC} Container exists but is stopped"
-        echo "   Run: podman compose up -d"
-        ERRORS=$((ERRORS + 1))
-    fi
-else
-    echo -e "${RED}✗${NC} Pinot container not found"
-    echo "   Run: podman compose up -d"
-    ERRORS=$((ERRORS + 1))
-fi
-
-# Check Pinot health
-echo -n "🏥 Pinot health: "
-if curl -s http://localhost:9000/health 2>/dev/null | grep -q "OK"; then
-    echo -e "${GREEN}✓${NC}"
-else
-    echo -e "${RED}✗${NC} Pinot not responding on http://localhost:9000"
-    echo "   Ensure Pinot is running: podman compose up -d"
+    echo -e "${RED}✗${NC} Cannot connect to Clickhouse on localhost:8123"
+    echo "   Ensure Clickhouse is running: podman compose up -d"
     ERRORS=$((ERRORS + 1))
 fi
 
@@ -97,32 +68,27 @@ else
     echo "   Run: go build -o oql-cli ./cmd/oql-cli"
 fi
 
-# Check Pinot tables
+# Check Clickhouse tables
 echo ""
-echo "📊 Checking Pinot tables..."
-
-check_table() {
-    TABLE_NAME=$1
-    echo -n "   $TABLE_NAME: "
-    if curl -s http://localhost:9000/tables 2>/dev/null | grep -q "\"$TABLE_NAME\""; then
-        echo -e "${GREEN}✓${NC}"
-        return 0
-    else
-        echo -e "${RED}✗${NC} Not found"
-        return 1
-    fi
-}
+echo "📊 Checking Clickhouse tables..."
 
 TABLES_OK=0
-if curl -s http://localhost:9000/health 2>/dev/null | grep -q "OK"; then
-    check_table "otel_spans" && TABLES_OK=$((TABLES_OK + 1))
-    check_table "otel_metrics" && TABLES_OK=$((TABLES_OK + 1))
-    check_table "otel_logs" && TABLES_OK=$((TABLES_OK + 1))
+if curl -s http://localhost:8123/ping 2>/dev/null | grep -q "Ok"; then
+    for table in otel_spans otel_metrics otel_logs; do
+        echo -n "   $table: "
+        result=$(curl -s "http://localhost:8123/?query=SELECT+count()+FROM+${table}" 2>/dev/null)
+        if [ $? -eq 0 ] && echo "$result" | grep -qE '^[0-9]+$'; then
+            echo -e "${GREEN}✓${NC}"
+            TABLES_OK=$((TABLES_OK + 1))
+        else
+            echo -e "${RED}✗${NC} Not found or not queryable"
+        fi
+    done
 
     if [ $TABLES_OK -eq 0 ]; then
         echo ""
         echo "   ${YELLOW}No tables found${NC}"
-        echo "   Run: ./otel-oql setup-schema --pinot-url=http://localhost:9000"
+        echo "   Run: ./otel-oql setup-schema --clickhouse-url=http://localhost:8123"
     fi
 fi
 
@@ -165,7 +131,7 @@ if [ $ERRORS -eq 0 ] && [ $TABLES_OK -eq 3 ]; then
     echo "🎉 OTEL-OQL is ready to use"
     echo ""
     echo "Next steps:"
-    echo "  • Open Pinot UI: http://localhost:9000"
+    echo "  • Clickhouse UI: http://localhost:8123/play"
     if [ $SERVICE_RUNNING -eq 0 ]; then
         echo "  • Start service: ./otel-oql --test-mode"
         echo "                or ./otel-oql --config=otel-oql.yaml"
@@ -175,10 +141,10 @@ if [ $ERRORS -eq 0 ] && [ $TABLES_OK -eq 3 ]; then
 elif [ $ERRORS -eq 0 ] && [ $TABLES_OK -eq 0 ]; then
     echo -e "${YELLOW}⚠ Setup incomplete${NC}"
     echo ""
-    echo "Pinot is running but tables not created."
+    echo "Clickhouse is running but tables not created."
     echo ""
     echo "Run schema setup:"
-    echo "  ./otel-oql setup-schema --pinot-url=http://localhost:9000"
+    echo "  ./otel-oql setup-schema --clickhouse-url=http://localhost:8123"
 else
     echo -e "${RED}✗ Issues found (${ERRORS} errors)${NC}"
     echo ""
