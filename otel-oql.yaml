@@ -2,11 +2,8 @@
 # This file can be used instead of command-line flags
 # Command-line flags will override these settings if provided
 
-# Pinot configuration
-pinot_url: "http://localhost:9000"
-
-# Kafka configuration (external Kafka via compose)
-kafka_brokers: "localhost:9092"
+# Clickhouse configuration
+clickhouse_url: "http://localhost:8123"
 
 # OTLP receiver ports
 otlp_grpc_port: 4317
@@ -32,7 +29,5 @@ debug_query: false         # Debug logging for query execution (incoming queries
 debug_translation: false   # Debug logging for query translation (OQL/PromQL/LogQL to SQL)
 
 # Startup validation
-# When enabled, the service will exit if Kafka/Pinot validation fails at startup
-# When disabled (default), warnings are logged but the service starts anyway
-# This allows services to start in any order in container orchestration (docker-compose, k8s)
+# When enabled, the service will exit if Clickhouse validation fails at startup
 exit_on_failure: false     # Set to true to exit on dependency validation failure
