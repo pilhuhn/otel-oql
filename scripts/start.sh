@@ -15,7 +15,16 @@ fi
 # Start Clickhouse if not already running
 if ! curl -sf "${CLICKHOUSE_URL}/ping" > /dev/null 2>&1; then
     echo "Starting Clickhouse..."
-    podman compose up -d clickhouse
+    if command -v container > /dev/null 2>&1; then
+        container run -d --name clickhouse \
+            -p 8123:8123 -p 9000:9000 \
+            -e CLICKHOUSE_DB=default \
+            -e CLICKHOUSE_USER=default \
+            -e CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT=1 \
+            clickhouse/clickhouse-server:latest
+    else
+        podman compose up -d clickhouse
+    fi
 
     echo -n "Waiting for Clickhouse"
     for i in $(seq 1 30); do
